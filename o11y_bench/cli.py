@@ -100,7 +100,11 @@ def main() -> None:
     regrade_parser.add_argument("--job-name")
     regrade_parser.add_argument("--quiet", action="store_true")
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
+    if args.command == "job":
+        args.harbor_args = tuple(arg for arg in extra_args if arg != "--")
+    elif extra_args:
+        parser.error(f"unrecognized arguments: {' '.join(extra_args)}")
 
     match args.command:
         case "run":
@@ -182,6 +186,7 @@ def _cmd_job(args: argparse.Namespace) -> None:
         override_memory_mb=args.override_memory_mb,
         override_storage_mb=args.override_storage_mb,
         task_names=tuple(args.task_name),
+        harbor_args=tuple(getattr(args, "harbor_args", ())),
     )
 
     if not args.dry_run:
