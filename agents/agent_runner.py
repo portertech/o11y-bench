@@ -250,6 +250,28 @@ async def completion_with_retries(
     raise RuntimeError("completion retries exhausted")
 
 
+def build_litellm_kwargs(
+    model: str,
+    tools: list[dict[str, Any]],
+    reasoning_effort: str,
+    temperature: str | None,
+) -> dict[str, Any]:
+    litellm_kwargs: dict[str, Any] = {
+        "model": model,
+        "tools": tools,
+        "drop_params": True,
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+        ],
+    }
+    if reasoning_effort != "off":
+        litellm_kwargs["reasoning_effort"] = reasoning_effort
+    elif temperature is not None and "claude-opus-4-7" not in model:
+        litellm_kwargs["temperature"] = float(temperature)
+
+    return litellm_kwargs
+
+
 async def run_agent() -> None:
     import litellm
     from mcp.client.session import ClientSession
@@ -330,18 +352,12 @@ async def run_agent() -> None:
                     {"role": "user", "content": task_prompt},
                 ]
 
-                litellm_kwargs: dict[str, Any] = {
-                    "model": model,
-                    "tools": tools,
-                    "drop_params": True,
-                    "cache_control_injection_points": [
-                        {"location": "message", "role": "system"},
-                    ],
-                }
-                if reasoning_effort != "off":
-                    litellm_kwargs["reasoning_effort"] = reasoning_effort
-                if temperature:
-                    litellm_kwargs["temperature"] = float(temperature)
+                litellm_kwargs = build_litellm_kwargs(
+                    model,
+                    tools,
+                    reasoning_effort,
+                    temperature,
+                )
 
                 step = 0
                 while True:
