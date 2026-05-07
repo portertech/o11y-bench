@@ -409,6 +409,19 @@ def test_main_passes_unknown_job_args_through_to_harbor(monkeypatch) -> None:
     assert execute_calls[0].harbor_args == ("--ak", "temperature=0")
 
 
+def test_main_rejects_unknown_args_before_job_subcommand(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["o11y_bench", "--quiet", "job", "--model", "openai/gpt-5.4-nano"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code != 0
+
+
 def test_cmd_job_rejects_agent_and_agent_import_path_together() -> None:
     args = argparse.Namespace(
         model="openai/gpt-5.4-nano",

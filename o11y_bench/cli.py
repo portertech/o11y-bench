@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from reporting.report_paths import latest_job_dir, normalize_repo_path
@@ -100,11 +101,7 @@ def main() -> None:
     regrade_parser.add_argument("--job-name")
     regrade_parser.add_argument("--quiet", action="store_true")
 
-    args, extra_args = parser.parse_known_args()
-    if args.command == "job":
-        args.harbor_args = tuple(arg for arg in extra_args if arg != "--")
-    elif extra_args:
-        parser.error(f"unrecognized arguments: {' '.join(extra_args)}")
+    args = _parse_args(parser)
 
     match args.command:
         case "run":
@@ -117,6 +114,16 @@ def main() -> None:
             _cmd_finalize(args)
         case "regrade":
             _cmd_regrade(args)
+
+
+def _parse_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
+    raw_args = sys.argv[1:]
+    if raw_args[:1] != ["job"]:
+        return parser.parse_args(raw_args)
+
+    args, harbor_args = parser.parse_known_args(raw_args)
+    args.harbor_args = tuple(arg for arg in harbor_args if arg != "--")
+    return args
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
