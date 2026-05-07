@@ -81,6 +81,7 @@ class JobSpec:
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None
     task_names: tuple[str, ...] = ()
+    harbor_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

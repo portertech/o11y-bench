@@ -539,7 +539,11 @@ def execute_job(spec: JobSpec, *, dry_run: bool = False, quiet: bool = False) ->
     rerun_harbor_exit_code: int | None = None
     if needs_harbor:
         rerun_harbor_exit_code = run_harbor(
-            build_resume_command(str(job_dir / "config.json"), quiet=quiet),
+            build_resume_command(
+                str(job_dir / "config.json"),
+                quiet=quiet,
+                harbor_args=spec.harbor_args,
+            ),
             forward_signals=False,
         )
 

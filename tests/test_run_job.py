@@ -1,11 +1,16 @@
 import argparse
 import json
+import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
 from o11y_bench import cli, config, harbor, run
+
+
+def _option_values(command: list[str], option: str) -> list[str]:
+    return [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == option]
 
 
 def test_build_command_produces_valid_harbor_invocation() -> None:
@@ -17,6 +22,7 @@ def test_build_command_produces_valid_harbor_invocation() -> None:
         reasoning_effort="off",
         n_attempts=3,
         n_concurrent=8,
+        harbor_args=("--ak", "temperature=0"),
     )
     command = harbor.build_command(spec)
 
@@ -24,6 +30,7 @@ def test_build_command_produces_valid_harbor_invocation() -> None:
     assert "--yes" in command
     assert "openai/gpt-5.4-mini" in command
     assert "test-job" in command
+    assert "temperature=0" in _option_values(command, "--ak")
 
 
 def test_build_command_maps_task_filters_to_harbor_include_task_name() -> None:
@@ -75,6 +82,7 @@ def test_execute_job_resumes_from_saved_config(monkeypatch, tmp_path) -> None:
         reasoning_effort="off",
         n_attempts=3,
         n_concurrent=2,
+        harbor_args=("--ak", "temperature=0"),
     )
 
     monkeypatch.setattr(run, "compute_task_checksums", lambda tasks_dir: {})
@@ -99,17 +107,23 @@ def test_execute_job_resumes_from_saved_config(monkeypatch, tmp_path) -> None:
         lambda job_dir, tasks_dir, task_checksums: job_dir / "run_report.html",
     )
 
-    harbor_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        run, "run_harbor", lambda command, **kwargs: harbor_calls.append(command) or 0
-    )
+    harbor_calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run_harbor(command: list[str], **kwargs: object) -> int:
+        harbor_calls.append((command, kwargs))
+        return 0
+
+    monkeypatch.setattr(run, "run_harbor", fake_run_harbor)
 
     result = run.execute_job(spec, quiet=True)
 
     assert result.harbor_exit_code == 0
-    assert harbor_calls == [
-        ["uv", "run", "harbor", "run", "--yes", "--config", str(job_dir / "config.json"), "--quiet"]
-    ]
+    assert len(harbor_calls) == 1
+    command, kwargs = harbor_calls[0]
+    assert str(job_dir / "config.json") in _option_values(command, "--config")
+    assert "temperature=0" in _option_values(command, "--ak")
+    assert "--quiet" in command
+    assert kwargs == {"forward_signals": False}
 
 
 def test_finalize_job_dir_sanitizes_artifact_paths(monkeypatch, tmp_path) -> None:
@@ -371,6 +385,41 @@ def test_cmd_job_auto_job_name_includes_custom_agent_import_path(monkeypatch) ->
 
     assert len(execute_calls) == 1
     assert execute_calls[0].job_name == "openai-gpt-5-4-nano-off-custom-agents-my-agent-myagent-k3"
+
+
+def test_main_passes_unknown_job_args_through_to_harbor(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["o11y_bench", "job", "--model", "openai/gpt-5.4-nano", "--ak", "temperature=0"],
+    )
+    monkeypatch.setattr(cli, "run_preflight", lambda *, quiet=False: None)
+
+    execute_calls: list[config.JobSpec] = []
+
+    def fake_execute_job(spec: config.JobSpec, *, dry_run: bool = False, quiet: bool = False):
+        execute_calls.append(spec)
+        return run.JobResult(status="dry_run", job_name=spec.job_name)
+
+    monkeypatch.setattr(cli, "execute_job", fake_execute_job)
+
+    cli.main()
+
+    assert len(execute_calls) == 1
+    assert execute_calls[0].harbor_args == ("--ak", "temperature=0")
+
+
+def test_main_rejects_unknown_args_before_job_subcommand(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["o11y_bench", "--quiet", "job", "--model", "openai/gpt-5.4-nano"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code != 0
 
 
 def test_cmd_job_rejects_agent_and_agent_import_path_together() -> None:

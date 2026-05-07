@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from reporting.report_paths import latest_job_dir, normalize_repo_path
@@ -100,7 +101,7 @@ def main() -> None:
     regrade_parser.add_argument("--job-name")
     regrade_parser.add_argument("--quiet", action="store_true")
 
-    args = parser.parse_args()
+    args = _parse_args(parser)
 
     match args.command:
         case "run":
@@ -113,6 +114,16 @@ def main() -> None:
             _cmd_finalize(args)
         case "regrade":
             _cmd_regrade(args)
+
+
+def _parse_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
+    raw_args = sys.argv[1:]
+    if raw_args[:1] != ["job"]:
+        return parser.parse_args(raw_args)
+
+    args, harbor_args = parser.parse_known_args(raw_args)
+    args.harbor_args = tuple(arg for arg in harbor_args if arg != "--")
+    return args
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -182,6 +193,7 @@ def _cmd_job(args: argparse.Namespace) -> None:
         override_memory_mb=args.override_memory_mb,
         override_storage_mb=args.override_storage_mb,
         task_names=tuple(args.task_name),
+        harbor_args=tuple(getattr(args, "harbor_args", ())),
     )
 
     if not args.dry_run:

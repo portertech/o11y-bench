@@ -49,12 +49,15 @@ def build_command(spec: JobSpec, *, quiet: bool = False) -> list[str]:
         command.extend(["--override-memory-mb", str(spec.override_memory_mb)])
     if spec.override_storage_mb is not None:
         command.extend(["--override-storage-mb", str(spec.override_storage_mb)])
+    command.extend(spec.harbor_args)
     if quiet:
         command.append("--quiet")
     return command
 
 
-def build_resume_command(config_path: str, *, quiet: bool = False) -> list[str]:
+def build_resume_command(
+    config_path: str, *, quiet: bool = False, harbor_args: tuple[str, ...] = ()
+) -> list[str]:
     """Build a `harbor run` command that resumes an existing job from its saved config."""
     command = [
         "uv",
@@ -65,6 +68,7 @@ def build_resume_command(config_path: str, *, quiet: bool = False) -> list[str]:
         "--config",
         config_path,
     ]
+    command.extend(harbor_args)
     if quiet:
         command.append("--quiet")
     return command
