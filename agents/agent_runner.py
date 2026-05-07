@@ -9,7 +9,7 @@
 Connects to mcp-grafana via streamable-http, runs an agent loop using litellm
 (multi-provider: Anthropic, OpenAI, Google, etc.), and writes an ATIF trajectory.
 
-Config via env vars: MODEL, MCP_URL, REASONING_EFFORT, TEMPERATURE, provider API keys.
+Config via env vars: MODEL, MCP_URL, REASONING_EFFORT, optional TEMPERATURE, provider API keys.
 For OpenAI-compatible endpoints (local or hosted), use ``openai/<id>`` + ``OPENAI_API_BASE``
 (and ``OPENAI_API_KEY`` if required). See LiteLLM provider docs for other routes.
 Timeout is handled by Harbor's agent timeout in task.toml.
@@ -259,7 +259,7 @@ async def run_agent() -> None:
     stack_host = os.environ.get("STACK_HOST", "127.0.0.1")
     mcp_url = os.environ.get("MCP_URL", f"http://{stack_host}:8080/mcp")
     reasoning_effort = os.environ.get("REASONING_EFFORT", "off")
-    temperature = float(os.environ.get("TEMPERATURE", "0.0"))
+    temperature = os.environ.get("TEMPERATURE")
 
     statement = Path("/app/instruction.txt").read_text().strip()
 
@@ -340,8 +340,8 @@ async def run_agent() -> None:
                 }
                 if reasoning_effort != "off":
                     litellm_kwargs["reasoning_effort"] = reasoning_effort
-                elif "claude-opus-4-7" not in model:
-                    litellm_kwargs["temperature"] = temperature
+                if temperature:
+                    litellm_kwargs["temperature"] = float(temperature)
 
                 step = 0
                 while True:

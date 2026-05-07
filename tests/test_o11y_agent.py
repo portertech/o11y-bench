@@ -100,6 +100,25 @@ async def test_run_passes_through_scenario_clock_env(
     assert env.exec_calls
     _, call_env = env.exec_calls[0]
     assert call_env["O11Y_SCENARIO_TIME_ISO"] == "2026-04-04T10:05:14Z"
+    assert "TEMPERATURE" not in call_env
+
+
+@pytest.mark.anyio
+async def test_run_passes_explicit_temperature_agent_kwarg(tmp_path: Path) -> None:
+    agent = O11yBenchAgent(
+        logs_dir=tmp_path,
+        model_name="anthropic/claude-opus-4-6",
+        temperature=0,
+    )
+    env: Any = MockEnvironment(MockExecResult(return_code=1))
+    context = AgentContext()
+
+    with pytest.raises(NonZeroAgentExitCodeError):
+        await agent.run("do the thing", env, context)
+
+    assert env.exec_calls
+    _, call_env = env.exec_calls[0]
+    assert call_env["TEMPERATURE"] == "0"
 
 
 @pytest.mark.anyio
