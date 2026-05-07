@@ -63,7 +63,7 @@ class O11yBenchAgent(BaseAgent):
         logs_dir: Path,
         model_name: str | None = None,
         reasoning_effort: str = "off",
-        temperature: float = 0.0,
+        temperature: float | None = None,
         extra_env: dict[str, str] | None = None,
         **kwargs: Any,
     ):
@@ -115,7 +115,6 @@ class O11yBenchAgent(BaseAgent):
         env: dict[str, str] = {
             "MODEL": model,
             "REASONING_EFFORT": self.reasoning_effort,
-            "TEMPERATURE": str(self.temperature),
             "PATH": "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
             # uv may run the runner from a cache dir; keep uploads under /app importable.
             "PYTHONPATH": "/app",
@@ -137,6 +136,8 @@ class O11yBenchAgent(BaseAgent):
             env["GOOGLE_API_KEY"] = gemini_api_key
         if mcp_url:
             env["MCP_URL"] = mcp_url
+        if self.temperature is not None:
+            env["TEMPERATURE"] = str(self.temperature)
         env.update(self._extra_env)
 
         self.logger.info(f"Running agent runner with model={model}")

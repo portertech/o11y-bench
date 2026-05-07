@@ -66,6 +66,31 @@ def test_o11y_trajectory_metadata_validates_against_harbor_model() -> None:
     assert parsed.final_metrics.extra["reasoning_effort"] == "off"
 
 
+def test_build_litellm_kwargs_omits_temperature_when_unset() -> None:
+    result = agent_runner.build_litellm_kwargs("openai/gpt-5.4-mini", [], "off", None)
+
+    assert "temperature" not in result
+
+
+def test_build_litellm_kwargs_parses_explicit_zero_temperature() -> None:
+    result = agent_runner.build_litellm_kwargs("openai/gpt-5.4-mini", [], "off", "0")
+
+    assert result["temperature"] == 0.0
+
+
+def test_build_litellm_kwargs_prefers_reasoning_effort_over_temperature() -> None:
+    result = agent_runner.build_litellm_kwargs("openai/gpt-5.4-mini", [], "medium", "0")
+
+    assert result["reasoning_effort"] == "medium"
+    assert "temperature" not in result
+
+
+def test_build_litellm_kwargs_omits_temperature_for_claude_opus_4_7() -> None:
+    result = agent_runner.build_litellm_kwargs("anthropic/claude-opus-4-7", [], "off", "0")
+
+    assert "temperature" not in result
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
