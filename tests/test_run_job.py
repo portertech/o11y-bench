@@ -457,6 +457,36 @@ def test_main_passes_unknown_job_args_through_to_harbor(monkeypatch) -> None:
     assert execute_calls[0].harbor_args == ("--ak", "temperature=0")
 
 
+def test_main_skip_preflight_is_available_to_outer_orchestrators(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "o11y_bench",
+            "job",
+            "--model",
+            "openai/gpt-5.4-nano",
+            "--skip-preflight",
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_preflight",
+        lambda **_kwargs: pytest.fail("preflight should have been skipped"),
+    )
+    execute_calls: list[config.JobSpec] = []
+
+    def fake_execute_job(spec: config.JobSpec, **_kwargs):
+        execute_calls.append(spec)
+        return run.JobResult(status="up_to_date", job_name=spec.job_name)
+
+    monkeypatch.setattr(cli, "execute_job", fake_execute_job)
+
+    cli.main()
+
+    assert len(execute_calls) == 1
+
+
 def test_main_enables_agento11y_publishing_only_with_explicit_flag(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,

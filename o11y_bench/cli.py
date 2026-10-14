@@ -93,6 +93,11 @@ def main() -> None:
     job_parser.add_argument("--dry-run", action="store_true")
     job_parser.add_argument("--quiet", action="store_true")
     job_parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="skip shared image setup when an outer orchestrator already ran preflight",
+    )
+    job_parser.add_argument(
         "--agento11y-publish",
         action="store_true",
         help="Publish each completed trial to an Agent Observability experiment",
@@ -218,7 +223,7 @@ def _cmd_job(args: argparse.Namespace) -> None:
         harbor_args=tuple(getattr(args, "harbor_args", ())),
     )
 
-    if not args.dry_run:
+    if not args.dry_run and not getattr(args, "skip_preflight", False):
         run_preflight(quiet=args.quiet)
 
     execute_kwargs = {"dry_run": args.dry_run, "quiet": args.quiet}

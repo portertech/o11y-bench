@@ -69,6 +69,31 @@ class MockEnvironment:
 
 
 @pytest.mark.anyio
+async def test_setup_uploads_explicit_system_prompt(tmp_path: Path) -> None:
+    system_prompt = tmp_path / "candidate-system-prompt.txt"
+    system_prompt.write_text("Optimized instructions")
+    agent = O11yBenchAgent(
+        logs_dir=tmp_path,
+        model_name="openai/gpt-5.4-nano",
+        system_prompt_path=str(system_prompt),
+    )
+    env: Any = MockEnvironment(MockExecResult(return_code=0))
+
+    await agent.setup(env)
+
+    assert (system_prompt.resolve(), "/app/system_prompt.txt") in env.upload_calls
+
+
+def test_explicit_system_prompt_must_exist(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="system prompt file does not exist"):
+        O11yBenchAgent(
+            logs_dir=tmp_path,
+            model_name="openai/gpt-5.4-nano",
+            system_prompt_path=str(tmp_path / "missing.txt"),
+        )
+
+
+@pytest.mark.anyio
 async def test_run_raises_nonzero_agent_exit_with_viewer_compatible_command(
     tmp_path: Path,
 ) -> None:

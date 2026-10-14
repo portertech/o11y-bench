@@ -65,12 +65,18 @@ class O11yBenchAgent(BaseAgent):
         reasoning_effort: str = "off",
         temperature: float | None = None,
         extra_env: dict[str, str] | None = None,
+        system_prompt_path: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
         self._extra_env = extra_env or {}
+        self._system_prompt_path = (
+            Path(system_prompt_path).expanduser().resolve() if system_prompt_path else SYSTEM_PROMPT
+        )
+        if not self._system_prompt_path.is_file():
+            raise ValueError(f"system prompt file does not exist: {self._system_prompt_path}")
 
     @staticmethod
     def name() -> str:
@@ -86,7 +92,7 @@ class O11yBenchAgent(BaseAgent):
             target_path="/app/agent_runner.py",
         )
         await environment.upload_file(
-            source_path=SYSTEM_PROMPT,
+            source_path=self._system_prompt_path,
             target_path="/app/system_prompt.txt",
         )
         await environment.upload_file(
