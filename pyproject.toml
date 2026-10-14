@@ -93,6 +93,7 @@ files = [
     "o11y_bench/agento11y_publish.py",
     "o11y_bench/agento11y_suite.py",
     "o11y_bench/opik_suite.py",
+    "o11y_bench/opik_publish.py",
     "o11y_bench/config.py",
     "o11y_bench/harbor.py",
     "o11y_bench/resume.py",

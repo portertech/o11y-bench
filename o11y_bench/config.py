@@ -96,6 +96,7 @@ class SuiteOpts:
     n_concurrent: int
     tasks_dir: Path
     agento11y_publish: bool = False
+    opik_publish: bool = False
     override_cpus: int | None = None
     override_memory_mb: int | None = None
     override_storage_mb: int | None = None

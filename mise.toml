@@ -43,6 +43,16 @@ run = "uv sync --extra opik"
 description = "Synchronize tasks-spec YAML as an Opik Test Suite"
 run = "uv run --extra opik python -m o11y_bench.opik_suite"
 
+[tasks."opik:job"]
+description = "Run or resume one job and stream completed trials to Opik"
+depends = ["setup:sync"]
+run = "uv run --extra opik python -m o11y_bench job --opik-publish"
+
+[tasks."opik:suite"]
+description = "Run the standard suite and stream completed trials to Opik"
+depends = ["setup:sync"]
+run = "uv run --extra opik python -m o11y_bench suite --opik-publish"
+
 # -- Bench --
 
 [tasks."bench:job"]

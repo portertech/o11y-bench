@@ -34,6 +34,7 @@ from .config import (
 )
 from .harbor import build_command, build_resume_command, run_preflight
 from .harbor import run as run_harbor
+from .opik_publish import OpikLivePublisher, OpikPublishResult
 from .regrade_stack import problem_requires_live_stack, running_regrade_stack
 from .resume import (
     ResumeTrialAction,
@@ -57,6 +58,7 @@ class JobResult:
     harbor_exit_code: int | None = None
     report_path: Path | None = None
     agento11y_result: Agento11yPublishResult | None = None
+    opik_result: OpikPublishResult | None = None
 
 
 def _print_job_summary(result: JobResult) -> None:
@@ -78,6 +80,8 @@ def _print_job_summary(result: JobResult) -> None:
         message = f"{message} | report: {result.report_path}"
     if result.agento11y_result:
         message = f"{message} | Agent Observability: {result.agento11y_result.url}"
+    if result.opik_result:
+        message = f"{message} | Opik: {result.opik_result.url}"
 
     print(f"{result.job_name}: {message}")
 
@@ -97,25 +101,69 @@ def _make_agento11y_publisher(spec: JobSpec, job_dir: Path) -> Agento11yLivePubl
     )
 
 
-def _run_harbor_with_agento11y(
+def _make_opik_publisher(spec: JobSpec, job_dir: Path) -> OpikLivePublisher:
+    agent_name = os.getenv("OPIK_AGENT_NAME", "").strip()
+    if not agent_name:
+        agent_name = spec.agent or spec.agent_import_path.split(":", 1)[0].rsplit(".", 1)[-1]
+    agent_version = os.getenv("OPIK_AGENT_VERSION", "").strip() or "unknown"
+    return OpikLivePublisher(
+        job_dir,
+        spec.tasks_dir,
+        model=spec.model,
+        agent_name=agent_name,
+        agent_version=agent_version,
+        planned_trial_count=len(_selected_task_names(spec)) * spec.n_attempts,
+    )
+
+
+def _run_harbor_with_publishers(
     command: list[str],
     *,
-    publisher: Agento11yLivePublisher | None,
-) -> tuple[int, Agento11yPublishResult | None]:
-    if publisher is None:
-        return run_harbor(command, forward_signals=False), None
+    agento11y_publisher: Agento11yLivePublisher | None,
+    opik_publisher: OpikLivePublisher | None,
+) -> tuple[int, Agento11yPublishResult | None, OpikPublishResult | None]:
+    publishers = [
+        (name, publisher)
+        for name, publisher in (
+            ("agento11y", agento11y_publisher),
+            ("opik", opik_publisher),
+        )
+        if publisher is not None
+    ]
+    if not publishers:
+        return run_harbor(command, forward_signals=False), None, None
 
-    publisher.start()
+    started: list[tuple[str, Any]] = []
     exit_code = 1
     error = ""
+    agento11y_result: Agento11yPublishResult | None = None
+    opik_result: OpikPublishResult | None = None
     try:
+        for name, publisher in publishers:
+            publisher.start()
+            started.append((name, publisher))
         exit_code = run_harbor(command, forward_signals=False)
     except BaseException as exc:
         error = str(exc)
         raise
     finally:
-        result = publisher.finish(succeeded=exit_code == 0 and not error, error=error)
-    return exit_code, result
+        finish_error: Exception | None = None
+        for name, publisher in started:
+            try:
+                publish_result = publisher.finish(
+                    succeeded=exit_code == 0 and not error,
+                    error=error,
+                )
+            except Exception as exc:
+                finish_error = finish_error or exc
+                continue
+            if name == "agento11y":
+                agento11y_result = publish_result
+            else:
+                opik_result = publish_result
+        if finish_error is not None:
+            raise finish_error
+    return exit_code, agento11y_result, opik_result
 
 
 def _selected_task_names(spec: JobSpec) -> list[str]:
@@ -536,13 +584,15 @@ def execute_job(
     dry_run: bool = False,
     quiet: bool = False,
     agento11y_publish: bool = False,
+    opik_publish: bool = False,
 ) -> JobResult:
     """Single-pass: plan, repair, run harbor, finalize."""
     task_checksums = compute_task_checksums(spec.tasks_dir)
     job_dir = spec.jobs_dir / spec.job_name
-    publisher = (
+    agento11y_publisher = (
         _make_agento11y_publisher(spec, job_dir) if agento11y_publish and not dry_run else None
     )
+    opik_publisher = _make_opik_publisher(spec, job_dir) if opik_publish and not dry_run else None
     scenario_time_iso = resolve_scenario_time()
     os.environ["O11Y_SCENARIO_TIME_ISO"] = scenario_time_iso
     task_names = _selected_task_names(spec)
@@ -562,8 +612,14 @@ def execute_job(
             if quiet:
                 _print_job_summary(result)
             return result
-        fresh_harbor_exit_code, fresh_publish_result = _run_harbor_with_agento11y(
-            build_command(spec, quiet=quiet), publisher=publisher
+        (
+            fresh_harbor_exit_code,
+            fresh_agento11y_result,
+            fresh_opik_result,
+        ) = _run_harbor_with_publishers(
+            build_command(spec, quiet=quiet),
+            agento11y_publisher=agento11y_publisher,
+            opik_publisher=opik_publisher,
         )
         report_path = finalize_job_dir(job_dir, spec.tasks_dir, task_checksums)
         result = JobResult(
@@ -573,7 +629,8 @@ def execute_job(
             missing_trials=missing,
             harbor_exit_code=fresh_harbor_exit_code,
             report_path=report_path,
-            agento11y_result=fresh_publish_result,
+            agento11y_result=fresh_agento11y_result,
+            opik_result=fresh_opik_result,
         )
         if quiet:
             _print_job_summary(result)
@@ -606,8 +663,18 @@ def execute_job(
         return result
 
     if not needs_repair and not needs_harbor:
-        existing_publish_result = publisher.publish_existing() if publisher is not None else None
-        result = JobResult("up_to_date", spec.job_name, agento11y_result=existing_publish_result)
+        existing_agento11y_result = (
+            agento11y_publisher.publish_existing() if agento11y_publisher is not None else None
+        )
+        existing_opik_result = (
+            opik_publisher.publish_existing() if opik_publisher is not None else None
+        )
+        result = JobResult(
+            "up_to_date",
+            spec.job_name,
+            agento11y_result=existing_agento11y_result,
+            opik_result=existing_opik_result,
+        )
         if quiet:
             _print_job_summary(result)
         return result
@@ -619,18 +686,27 @@ def execute_job(
                 print(f"  {note}")
 
     rerun_harbor_exit_code: int | None = None
-    publish_result: Agento11yPublishResult | None = None
+    agento11y_result: Agento11yPublishResult | None = None
+    opik_result: OpikPublishResult | None = None
     if needs_harbor:
-        rerun_harbor_exit_code, publish_result = _run_harbor_with_agento11y(
+        (
+            rerun_harbor_exit_code,
+            agento11y_result,
+            opik_result,
+        ) = _run_harbor_with_publishers(
             build_resume_command(
                 str(job_dir / "config.json"),
                 quiet=quiet,
                 harbor_args=spec.harbor_args,
             ),
-            publisher=publisher,
+            agento11y_publisher=agento11y_publisher,
+            opik_publisher=opik_publisher,
         )
-    elif publisher is not None:
-        publish_result = publisher.publish_existing()
+    else:
+        if agento11y_publisher is not None:
+            agento11y_result = agento11y_publisher.publish_existing()
+        if opik_publisher is not None:
+            opik_result = opik_publisher.publish_existing()
 
     report_path = finalize_job_dir(job_dir, spec.tasks_dir, task_checksums)
     if report_path and not quiet:
@@ -645,7 +721,8 @@ def execute_job(
         missing_trials=missing,
         harbor_exit_code=rerun_harbor_exit_code,
         report_path=report_path,
-        agento11y_result=publish_result,
+        agento11y_result=agento11y_result,
+        opik_result=opik_result,
     )
     if quiet:
         _print_job_summary(result)
@@ -668,6 +745,7 @@ def _run_provider_queue(provider: str, suite_dir: Path, opts: SuiteOpts) -> list
             dry_run=opts.dry_run,
             quiet=opts.quiet,
             agento11y_publish=opts.agento11y_publish,
+            opik_publish=opts.opik_publish,
         )
         results.append(result)
         if result.harbor_exit_code and result.harbor_exit_code != 0:

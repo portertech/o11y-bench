@@ -55,6 +55,11 @@ def main() -> None:
         action="store_true",
         help="Publish each completed trial to an Agent Observability experiment",
     )
+    suite_parser.add_argument(
+        "--opik-publish",
+        action="store_true",
+        help="Publish traces and grading feedback to an Opik Test Suite experiment",
+    )
     suite_parser.add_argument("--n-attempts", type=int, default=DEFAULT_N_ATTEMPTS)
     suite_parser.add_argument("--n-concurrent", type=int, default=DEFAULT_N_CONCURRENT)
     suite_parser.add_argument("--override-cpus", type=int)
@@ -91,6 +96,11 @@ def main() -> None:
         "--agento11y-publish",
         action="store_true",
         help="Publish each completed trial to an Agent Observability experiment",
+    )
+    job_parser.add_argument(
+        "--opik-publish",
+        action="store_true",
+        help="Publish traces and grading feedback to an Opik Test Suite experiment",
     )
 
     # --- finalize: stamp checksums + generate per-job report ---
@@ -167,6 +177,7 @@ def _cmd_suite(args: argparse.Namespace) -> None:
             n_concurrent=args.n_concurrent,
             tasks_dir=_resolve_tasks_path(args.path),
             agento11y_publish=args.agento11y_publish,
+            opik_publish=args.opik_publish,
             override_cpus=args.override_cpus,
             override_memory_mb=args.override_memory_mb,
             override_storage_mb=args.override_storage_mb,
@@ -213,6 +224,8 @@ def _cmd_job(args: argparse.Namespace) -> None:
     execute_kwargs = {"dry_run": args.dry_run, "quiet": args.quiet}
     if getattr(args, "agento11y_publish", False):
         execute_kwargs["agento11y_publish"] = True
+    if getattr(args, "opik_publish", False):
+        execute_kwargs["opik_publish"] = True
     result = execute_job(spec, **execute_kwargs)
     if result.agento11y_result and not args.quiet:
         published = result.agento11y_result
@@ -221,6 +234,14 @@ def _cmd_job(args: argparse.Namespace) -> None:
             f"to Agent Observability experiment {published.experiment_id}"
         )
         print(f"View in Agent Observability: {published.url}")
+    if result.opik_result and not args.quiet:
+        opik_published = result.opik_result
+        print(
+            f"Published {opik_published.trial_count} trial(s) "
+            f"and {opik_published.score_count} score(s) "
+            f"to Opik experiment {opik_published.experiment_id}"
+        )
+        print(f"View in Opik: {opik_published.url}")
     if result.harbor_exit_code and result.harbor_exit_code != 0:
         raise SystemExit(result.harbor_exit_code)
 
