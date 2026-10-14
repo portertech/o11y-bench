@@ -518,6 +518,53 @@ def _save_result(result: Any, output_dir: Path, *, arguments: dict[str, Any]) ->
     )
 
 
+def resolve_run_manifest(
+    path: Path,
+    requested: dict[str, Any],
+    *,
+    resume: bool,
+) -> dict[str, Any]:
+    """Create a run manifest or validate immutable settings before resuming."""
+
+    if not path.exists():
+        if resume:
+            raise ValueError(f"cannot resume; optimization manifest does not exist: {path}")
+        return requested
+    if not resume:
+        raise ValueError(
+            f"optimization run already exists: {path.parent}. "
+            "Use a new --run-name or pass --resume."
+        )
+    try:
+        existing = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid optimization manifest: {path}") from exc
+    stable_keys = (
+        "run_name",
+        "model",
+        "optimizer_model",
+        "training_tasks",
+        "validation_tasks",
+        "scenario_time",
+        "score_mode",
+        "n_attempts",
+        "reasoning_effort",
+        "project_name",
+        "dataset_prefix",
+        "publish_traces",
+        "detailed_feedback",
+        "seed",
+    )
+    mismatches = [key for key in stable_keys if existing.get(key) != requested.get(key)]
+    if mismatches:
+        raise ValueError("resume settings differ from the saved run: " + ", ".join(mismatches))
+    return {
+        **existing,
+        "max_trials": requested["max_trials"],
+        "prompts_per_round": requested["prompts_per_round"],
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Optimize the o11y-bench agent system prompt through real Harbor scenarios"
@@ -535,6 +582,11 @@ def _parser() -> argparse.ArgumentParser:
         dest="validation_task_names",
     )
     parser.add_argument("--run-name")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue an existing --run-name with matching immutable settings",
+    )
     parser.add_argument("--max-trials", type=int, default=3)
     parser.add_argument("--prompts-per-round", type=int, default=1)
     parser.add_argument("--n-attempts", type=int, default=1)
@@ -556,8 +608,6 @@ def main() -> None:
         raise SystemExit("--max-trials, --prompts-per-round, and --n-attempts must be positive")
 
     run_name = _slug(args.run_name or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
-    optimization_id = str(uuid.uuid7())
-    scenario_time = _scenario_time()
     all_tasks = load_optimization_tasks()
     training_tasks = select_tasks(all_tasks, args.task_names, split="training")
     validation_tasks = select_tasks(all_tasks, args.validation_task_names, split="validation")
@@ -566,6 +616,51 @@ def main() -> None:
     )
     if overlap:
         raise SystemExit(f"training and validation tasks overlap: {', '.join(overlap)}")
+
+    publish_traces = not args.no_publish_traces
+    dataset_prefix = args.dataset_prefix or f"o11y-bench-opt-{run_name}"
+    output_dir = args.jobs_dir.resolve() / run_name
+    manifest_path = output_dir / "optimization_manifest.json"
+    requested_scenario_time = _scenario_time()
+    if args.resume and manifest_path.exists():
+        try:
+            saved_manifest = json.loads(manifest_path.read_text())
+            requested_scenario_time = str(
+                saved_manifest.get("scenario_time") or requested_scenario_time
+            )
+        except OSError, json.JSONDecodeError:
+            pass
+    requested_manifest = {
+        "run_name": run_name,
+        "optimization_id": str(uuid.uuid7()),
+        "model": args.model,
+        "optimizer_model": args.optimizer_model or args.model,
+        "training_tasks": [task.task_id for task in training_tasks],
+        "validation_tasks": [task.task_id for task in validation_tasks],
+        "scenario_time": requested_scenario_time,
+        "score_mode": args.score_mode,
+        "n_attempts": args.n_attempts,
+        "reasoning_effort": args.reasoning_effort,
+        "project_name": args.project_name,
+        "dataset_prefix": dataset_prefix,
+        "max_trials": args.max_trials,
+        "prompts_per_round": args.prompts_per_round,
+        "publish_traces": publish_traces,
+        "detailed_feedback": args.detailed_feedback,
+        "seed": args.seed,
+    }
+    try:
+        run_manifest = resolve_run_manifest(
+            manifest_path,
+            requested_manifest,
+            resume=args.resume,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    optimization_id = str(run_manifest["optimization_id"])
+    scenario_time = str(run_manifest["scenario_time"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(run_manifest, indent=2) + "\n")
 
     optimizer_module = _import_optimizer()
     import opik
@@ -577,12 +672,10 @@ def main() -> None:
             check=True,
         )
 
-    publish_traces = not args.no_publish_traces
     if publish_traces:
         sync_test_suite(progress=lambda message: print(message, flush=True))
 
     client = opik.Opik()
-    dataset_prefix = args.dataset_prefix or f"o11y-bench-opt-{run_name}"
     training_dataset = sync_optimization_dataset(
         client,
         name=f"{dataset_prefix}-train",
@@ -599,40 +692,21 @@ def main() -> None:
             split="validation",
             tasks=validation_tasks,
         )
-    client.create_optimization(
-        dataset_name=training_dataset.name,
-        objective_name="benchmark_reward_metric",
-        name=f"o11y-bench-{run_name}",
-        metadata={
-            "source": "o11y-bench",
-            "framework": "harbor",
-            "model": args.model,
-            "optimizer_model": args.optimizer_model or args.model,
-        },
-        optimization_id=optimization_id,
-        project_name=args.project_name,
-    )
+    if not args.resume:
+        client.create_optimization(
+            dataset_name=training_dataset.name,
+            objective_name="benchmark_reward_metric",
+            name=f"o11y-bench-{run_name}",
+            metadata={
+                "source": "o11y-bench",
+                "framework": "harbor",
+                "model": args.model,
+                "optimizer_model": args.optimizer_model or args.model,
+            },
+            optimization_id=optimization_id,
+            project_name=args.project_name,
+        )
     client.flush()
-
-    output_dir = args.jobs_dir.resolve() / run_name
-    output_dir.mkdir(parents=True, exist_ok=True)
-    run_manifest = {
-        "run_name": run_name,
-        "optimization_id": optimization_id,
-        "model": args.model,
-        "optimizer_model": args.optimizer_model or args.model,
-        "training_tasks": [task.task_id for task in training_tasks],
-        "validation_tasks": [task.task_id for task in validation_tasks],
-        "scenario_time": scenario_time,
-        "score_mode": args.score_mode,
-        "n_attempts": args.n_attempts,
-        "max_trials": args.max_trials,
-        "prompts_per_round": args.prompts_per_round,
-        "publish_traces": publish_traces,
-    }
-    (output_dir / "optimization_manifest.json").write_text(
-        json.dumps(run_manifest, indent=2) + "\n"
-    )
 
     runner = HarborOptimizationRunner(
         root=ROOT,
@@ -672,6 +746,7 @@ def main() -> None:
         max_trials=args.max_trials,
         project_name=args.project_name,
         optimization_id=optimization_id,
+        auto_continue=args.resume,
         allow_tool_use=False,
         optimize_prompts="system",
         experiment_config={

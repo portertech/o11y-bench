@@ -247,6 +247,48 @@ def test_parse_evaluation_output_rejects_regular_model_text():
         opik_optimize.parse_evaluation_output("ordinary final answer")
 
 
+def test_resolve_run_manifest_requires_explicit_compatible_resume(tmp_path):
+    path = tmp_path / "run" / "optimization_manifest.json"
+    path.parent.mkdir()
+    requested = {
+        "run_name": "run",
+        "optimization_id": "new",
+        "model": "openai/model",
+        "optimizer_model": "openai/optimizer",
+        "training_tasks": ["task-a"],
+        "validation_tasks": [],
+        "scenario_time": "2026-01-01T00:00:00Z",
+        "score_mode": "mean",
+        "n_attempts": 1,
+        "reasoning_effort": "off",
+        "project_name": "o11y-bench",
+        "dataset_prefix": "dataset",
+        "publish_traces": True,
+        "detailed_feedback": False,
+        "seed": 42,
+        "max_trials": 2,
+        "prompts_per_round": 1,
+    }
+    saved = {**requested, "optimization_id": "saved", "max_trials": 1}
+    path.write_text(json.dumps(saved))
+
+    with pytest.raises(ValueError, match="already exists"):
+        opik_optimize.resolve_run_manifest(path, requested, resume=False)
+
+    resumed = opik_optimize.resolve_run_manifest(path, requested, resume=True)
+    assert resumed["optimization_id"] == "saved"
+    assert resumed["max_trials"] == 2
+
+    incompatible = {**requested, "model": "openai/other"}
+    with pytest.raises(ValueError, match="model"):
+        opik_optimize.resolve_run_manifest(path, incompatible, resume=True)
+
+
+def test_resolve_run_manifest_rejects_missing_resume(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        opik_optimize.resolve_run_manifest(tmp_path / "missing.json", {}, resume=True)
+
+
 def test_make_optimizable_agent_passes_candidate_system_prompt():
     invocations = []
 
