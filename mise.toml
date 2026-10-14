@@ -35,6 +35,14 @@ description = "Run the standard suite and publish it to Agent Observability"
 depends = ["setup:sync"]
 run = "uv run --extra agento11y python -m o11y_bench suite --agento11y-publish"
 
+[tasks."opik:setup"]
+description = "Install the pinned Opik SDK integration"
+run = "uv sync --extra opik"
+
+[tasks."opik:sync-suite"]
+description = "Synchronize tasks-spec YAML as an Opik Test Suite"
+run = "uv run --extra opik python -m o11y_bench.opik_suite"
+
 # -- Bench --
 
 [tasks."bench:job"]
