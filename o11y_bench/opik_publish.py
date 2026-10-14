@@ -23,7 +23,7 @@ from reporting.report_data import (
     trial_reasoning_effort,
 )
 
-from .opik_suite import DEFAULT_TEST_SUITE_NAME, opik_url
+from .opik_suite import DEFAULT_TEST_SUITE_NAME, deterministic_uuid7, opik_url
 
 _STATE_FILE = ".opik-publish.json"
 _EXPERIMENT_NAMESPACE = uuid.UUID("4982e908-b247-5507-a58a-a87cc8dff059")
@@ -673,22 +673,24 @@ def _bounded_text(value: str) -> str:
 
 
 def _default_experiment_id(suite_name: str, job_name: str) -> str:
-    return str(uuid.uuid5(_EXPERIMENT_NAMESPACE, f"{suite_name}\x1f{job_name}"))
+    return deterministic_uuid7(_EXPERIMENT_NAMESPACE, f"{suite_name}\x1f{job_name}")
 
 
 def _trace_id(experiment_id: str, harbor_trial_id: str) -> str:
-    return str(uuid.uuid5(_TRACE_NAMESPACE, f"{experiment_id}\x1f{harbor_trial_id}"))
+    return deterministic_uuid7(_TRACE_NAMESPACE, f"{experiment_id}\x1f{harbor_trial_id}")
 
 
 def _span_id(trace_id: str, key: str) -> str:
-    return str(uuid.uuid5(_SPAN_NAMESPACE, f"{trace_id}\x1f{key}"))
+    return deterministic_uuid7(_SPAN_NAMESPACE, f"{trace_id}\x1f{key}")
 
 
 def _validate_uuid(value: str, name: str) -> None:
     try:
-        uuid.UUID(value)
+        parsed = uuid.UUID(value)
     except ValueError as exc:
-        raise ValueError(f"{name} must be a UUID, got {value!r}") from exc
+        raise ValueError(f"{name} must be a UUIDv7, got {value!r}") from exc
+    if parsed.version != 7:
+        raise ValueError(f"{name} must be a UUIDv7, got {value!r}")
 
 
 def _slug(value: str) -> str:

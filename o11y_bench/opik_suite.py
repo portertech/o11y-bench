@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import uuid
 from collections.abc import Callable
@@ -19,12 +20,24 @@ DEFAULT_TEST_SUITE_NAME = "o11y-bench"
 DEFAULT_SPECS_DIR = ROOT / "tasks-spec"
 _DEFAULT_PASS_THRESHOLD = 1
 _TEST_CASE_NAMESPACE = uuid.UUID("33af940f-9b80-5ca2-a64e-a62bdd13ef51")
+_DETERMINISTIC_TIMESTAMP_MS = 1_704_067_200_000  # 2024-01-01T00:00:00Z
+
+
+def deterministic_uuid7(namespace: uuid.UUID, name: str) -> str:
+    """Return a reproducible UUIDv7 accepted by Opik's explicit-ID APIs."""
+
+    digest = hashlib.sha256(namespace.bytes + name.encode()).digest()
+    raw = bytearray(digest[:16])
+    raw[:6] = _DETERMINISTIC_TIMESTAMP_MS.to_bytes(6, "big")
+    raw[6] = (raw[6] & 0x0F) | 0x70
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(raw)))
 
 
 def test_case_uuid(task_id: str) -> str:
     """Return the stable Opik dataset-item UUID for an o11y-bench task."""
 
-    return str(uuid.uuid5(_TEST_CASE_NAMESPACE, task_id))
+    return deterministic_uuid7(_TEST_CASE_NAMESPACE, task_id)
 
 
 def _suite_name() -> str:

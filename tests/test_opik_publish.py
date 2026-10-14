@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -228,6 +229,8 @@ def test_live_publisher_uploads_trace_spans_scores_and_state(monkeypatch, tmp_pa
     assert upload_kwargs == {"project_name": "o11y-bench-test", "num_threads": 1}
     record = records[0]
     assert record.dataset_item_id == opik_suite.test_case_uuid("task-a")
+    assert uuid.UUID(record.trace.id).version == 7
+    assert all(uuid.UUID(span.id).version == 7 for span in record.spans)
     assert record.trace.output == {"response": "Final grounded answer."}
     assert [span.type for span in record.spans] == ["general", "llm", "tool", "llm"]
     assert {score["name"] for score in record.feedback_scores} == {
@@ -302,7 +305,7 @@ def test_publish_options_rejects_invalid_boolean(monkeypatch):
         opik_publish.OpikPublishOptions.from_env()
 
 
-def test_explicit_experiment_id_must_be_uuid(tmp_path):
+def test_explicit_experiment_id_must_be_uuid7(tmp_path):
     with pytest.raises(ValueError, match="OPIK_EXPERIMENT_ID"):
         opik_publish.OpikLivePublisher(
             tmp_path / "job",

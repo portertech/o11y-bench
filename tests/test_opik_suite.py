@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +85,7 @@ def test_build_test_suite_items_maps_task_specs_and_stable_id(tmp_path):
     assert len(items) == 1
     item = items[0]
     assert item["id"] == opik_suite.test_case_uuid("incident")
+    assert uuid.UUID(item["id"]).version == 7
     assert item["data"]["task_id"] == "incident"
     assert item["data"]["category"] == "investigation"
     assert item["data"]["tags"] == ["metrics", "logs"]

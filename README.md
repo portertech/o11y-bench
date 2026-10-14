@@ -440,7 +440,7 @@ uv run --extra opik python -m o11y_bench job \
 Use `mise run opik:suite -- <options>` for the standard multi-model suite. Publishing state is
 stored in `.opik-publish.json` inside each job directory. Experiment, trace, and span UUIDs are
 deterministic, so Harbor resume and retry operations do not duplicate completed trials. Set
-`OPIK_EXPERIMENT_ID` to a UUID only when you need to force an explicit experiment identity.
+`OPIK_EXPERIMENT_ID` to a UUIDv7 only when you need to force an explicit experiment identity.
 
 Raw `trajectory.json`, `grading_details.json`, and `result.json` uploads are disabled by default to
 avoid duplicating potentially sensitive artifacts. Set `OPIK_UPLOAD_ARTIFACTS=true` to attach them
