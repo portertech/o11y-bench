@@ -22,6 +22,10 @@ agento11y = ["agento11y>=0.12.0"]
 opik = [
     "opik==2.2.100",
 ]
+opik-optimization = [
+    "opik==2.2.100",
+    "opik-optimizer==3.2.0",
+]
 
 [dependency-groups]
 dev = [
@@ -94,6 +98,7 @@ files = [
     "o11y_bench/agento11y_suite.py",
     "o11y_bench/opik_suite.py",
     "o11y_bench/opik_publish.py",
+    "o11y_bench/opik_optimize.py",
     "o11y_bench/config.py",
     "o11y_bench/harbor.py",
     "o11y_bench/resume.py",
@@ -106,6 +111,7 @@ files = [
 module = [
     "agento11y",
     "opik.*",
+    "opik_optimizer.*",
     "promql_parser",
     "harbor.*",
 ]

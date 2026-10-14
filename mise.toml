@@ -53,6 +53,15 @@ description = "Run the standard suite and stream completed trials to Opik"
 depends = ["setup:sync"]
 run = "uv run --extra opik python -m o11y_bench suite --opik-publish"
 
+[tasks."opik:optimization:setup"]
+description = "Install the pinned Opik Agent Optimizer integration"
+run = "uv sync --extra opik-optimization"
+
+[tasks."opik:optimize"]
+description = "Optimize the system prompt through real Harbor scenarios"
+depends = ["setup:sync"]
+run = "uv run --extra opik-optimization python -m o11y_bench.opik_optimize"
+
 # -- Bench --
 
 [tasks."bench:job"]

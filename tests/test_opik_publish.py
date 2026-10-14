@@ -262,6 +262,30 @@ def test_publisher_reuses_state_without_duplicate_upload(monkeypatch, tmp_path):
     assert second_experiment.uploads == []
 
 
+def test_publisher_links_harbor_experiment_to_optimization(monkeypatch, tmp_path):
+    job_dir, tasks_dir, _trial_dir = _write_trial(tmp_path)
+    experiment = FakeExperiment()
+    client = FakeClient(experiment)
+    fake_opik = FakeOpik(client)
+    monkeypatch.setattr(opik_publish, "_import_opik", lambda: fake_opik)
+    optimization_id = "018cc251-f400-7000-8000-000000000001"
+    publisher = opik_publish.OpikLivePublisher(
+        job_dir,
+        tasks_dir,
+        model="anthropic/claude-test",
+        agent_name="o11y-bench",
+        agent_version="test",
+        options=opik_publish.OpikPublishOptions(optimization_id=optimization_id),
+    )
+
+    publisher._connect()
+    publisher.scan_once()
+
+    assert client.create_kwargs["optimization_id"] == optimization_id
+    record = experiment.uploads[0][0][0]
+    assert record.trace.metadata["optimization_id"] == optimization_id
+
+
 def test_finish_marks_successful_experiment_complete(monkeypatch, tmp_path):
     job_dir, tasks_dir, _trial_dir = _write_trial(tmp_path)
     publisher, experiment, client = _publisher(monkeypatch, job_dir, tasks_dir)

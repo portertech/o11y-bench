@@ -38,6 +38,7 @@ class OpikPublishOptions:
     """Environment-driven settings for one Opik experiment."""
 
     experiment_id: str = ""
+    optimization_id: str = ""
     suite_name: str = DEFAULT_TEST_SUITE_NAME
     name: str = ""
     tags: list[str] = field(default_factory=lambda: ["o11y-bench"])
@@ -49,6 +50,7 @@ class OpikPublishOptions:
         tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
         return cls(
             experiment_id=os.getenv("OPIK_EXPERIMENT_ID", "").strip(),
+            optimization_id=os.getenv("OPIK_OPTIMIZATION_ID", "").strip(),
             suite_name=os.getenv("OPIK_TEST_SUITE_NAME", DEFAULT_TEST_SUITE_NAME).strip()
             or DEFAULT_TEST_SUITE_NAME,
             name=os.getenv("OPIK_EXPERIMENT_NAME", "").strip(),
@@ -93,6 +95,8 @@ class OpikLivePublisher:
             self.options.suite_name, self.job_dir.name
         )
         _validate_uuid(self.experiment_id, "OPIK_EXPERIMENT_ID")
+        if self.options.optimization_id:
+            _validate_uuid(self.options.optimization_id, "OPIK_OPTIMIZATION_ID")
         self.experiment_name = self.options.name or f"o11y-bench {self.job_dir.name}"
         self._opik: Any | None = None
         self._client: Any | None = None
@@ -216,6 +220,7 @@ class OpikLivePublisher:
                     "planned_trial_count": self.planned_trial_count,
                 },
                 evaluation_method="evaluation_suite",
+                optimization_id=self.options.optimization_id or None,
                 tags=_dedupe([*self.options.tags, self.agent_name, self.model]),
                 dataset_version_id=getattr(version_info, "id", None),
                 project_name=suite.project_name,
@@ -258,6 +263,7 @@ class OpikLivePublisher:
             case,
             trace_id=trace_id,
             project_name=self._project_name,
+            optimization_id=self.options.optimization_id,
         )
         feedback_scores = _feedback_scores(result, trial_dir, rewards, self.tasks_dir)
         record = self._opik.ExperimentItemBulkRecord(
@@ -319,6 +325,7 @@ def _trace_and_spans(
     *,
     trace_id: str,
     project_name: str | None,
+    optimization_id: str = "",
 ) -> tuple[Any, list[Any]]:
     started_at = _result_datetime(result, "started_at")
     finished_at = _result_datetime(result, "finished_at", fallback=started_at)
@@ -341,6 +348,7 @@ def _trace_and_spans(
             "framework": "harbor",
             "harbor_trial_id": trial_dir.name,
             "harbor_result_id": result.get("id"),
+            "optimization_id": optimization_id or None,
             "agent_name": (result.get("agent_info") or {}).get("name"),
             "agent_version": (result.get("agent_info") or {}).get("version"),
             "model_provider": provider,
