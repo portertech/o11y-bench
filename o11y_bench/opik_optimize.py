@@ -88,17 +88,25 @@ class HarborOptimizationRunner:
         self.detailed_feedback = detailed_feedback
         self.scenario_time = scenario_time
 
-    def invoke(self, system_prompt: str, dataset_item: dict[str, Any]) -> str:
+    def invoke(
+        self,
+        system_prompt: str,
+        dataset_item: dict[str, Any],
+        *,
+        candidate_template: str | None = None,
+    ) -> str:
         task_id = str(dataset_item.get("task_id") or "")
         if not task_id or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", task_id):
             raise ValueError(f"invalid optimization task_id: {task_id!r}")
         if not (self.root / "tasks" / task_id).is_dir():
             raise ValueError(f"generated Harbor task does not exist: {task_id}")
 
-        candidate_hash = hashlib.sha256(system_prompt.encode()).hexdigest()
+        candidate_source = candidate_template or system_prompt
+        candidate_hash = hashlib.sha256(candidate_source.encode()).hexdigest()
         candidate_dir = self.jobs_dir / "candidates" / candidate_hash
         candidate_dir.mkdir(parents=True, exist_ok=True)
-        prompt_path = candidate_dir / "system_prompt.txt"
+        _write_stable_file(candidate_dir / "system_prompt.template.txt", candidate_source)
+        prompt_path = candidate_dir / f"{task_id}.system_prompt.txt"
         _write_stable_file(prompt_path, system_prompt)
 
         job_name = f"{task_id}-opt-{candidate_hash[:16]}-k{self.n_attempts}"
@@ -320,11 +328,12 @@ def parse_evaluation_output(value: str) -> TrialEvaluation:
         raise ValueError("agent output did not contain an o11y-bench evaluation result") from exc
 
 
-def benchmark_reward_metric(_dataset_item: dict[str, Any], llm_output: str) -> Any:
+def benchmark_reward_metric(dataset_item: dict[str, Any], llm_output: str) -> Any:
     """Return the authoritative benchmark reward to Opik's optimization engine."""
 
     from opik.evaluation.metrics.score_result import ScoreResult
 
+    del dataset_item
     evaluation = parse_evaluation_output(llm_output)
     reason_parts = [
         f"task={evaluation.task_id}",
@@ -364,10 +373,25 @@ def make_optimizable_agent(optimizer: Any, runner: HarborOptimizationRunner, pro
             if len(prompts) != 1:
                 raise ValueError("o11y-bench optimization supports one system prompt")
             prompt = next(iter(prompts.values()))
-            system_prompt = _system_prompt_text(prompt)
-            return runner.invoke(system_prompt, dataset_item)
+            system_prompt_template = _system_prompt_text(prompt)
+            system_prompt = _rendered_system_prompt(prompt, dataset_item)
+            return runner.invoke(
+                system_prompt,
+                dataset_item,
+                candidate_template=system_prompt_template,
+            )
 
     return HarborOptimizableAgent()
+
+
+def _rendered_system_prompt(prompt: Any, dataset_item: dict[str, Any]) -> str:
+    get_messages = getattr(prompt, "get_messages", None)
+    if callable(get_messages):
+        messages = get_messages(dataset_item)
+        for message in messages:
+            if message.get("role") == "system" and isinstance(message.get("content"), str):
+                return str(message["content"])
+    return _system_prompt_text(prompt)
 
 
 def _system_prompt_text(prompt: Any) -> str:

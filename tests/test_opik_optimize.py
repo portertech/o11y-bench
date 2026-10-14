@@ -187,7 +187,7 @@ def test_harbor_runner_executes_candidate_and_returns_authoritative_score(monkey
     command, kwargs = calls[0]
     assert "--skip-preflight" in command
     assert "--opik-publish" in command
-    prompt_path = jobs_dir / "run-a" / "candidates" / candidate_hash / "system_prompt.txt"
+    prompt_path = jobs_dir / "run-a" / "candidates" / candidate_hash / "task-a.system_prompt.txt"
     assert f"system_prompt_path={prompt_path}" in command
     assert kwargs["env"]["OPIK_OPTIMIZATION_ID"] == runner.optimization_id
     assert kwargs["env"]["O11Y_SCENARIO_TIME_ISO"] == "2026-01-01T00:00:00Z"
@@ -222,6 +222,26 @@ def test_evaluate_job_supports_pass_at_k_and_detailed_feedback(tmp_path):
     assert "explanation:criterion=grounded" in result.feedback
 
 
+def test_benchmark_metric_accepts_optimizer_keyword_arguments():
+    evaluation = opik_optimize.TrialEvaluation(
+        task_id="task-a",
+        candidate_hash="hash",
+        score=0.75,
+        rewards=[0.75],
+        final_response="answer",
+        feedback=["score=0.75"],
+        job_dir="/tmp/job",
+    )
+
+    score = opik_optimize.benchmark_reward_metric(
+        dataset_item={"task_id": "task-a"},
+        llm_output=evaluation.as_output(),
+    )
+
+    assert score.name == "o11y_bench_reward"
+    assert score.value == 0.75
+
+
 def test_parse_evaluation_output_rejects_regular_model_text():
     with pytest.raises(ValueError, match="did not contain"):
         opik_optimize.parse_evaluation_output("ordinary final answer")
@@ -239,19 +259,24 @@ def test_make_optimizable_agent_passes_candidate_system_prompt():
         optimization_id = "optimization-id"
         run_name = "run-a"
 
-        def invoke(self, prompt, dataset_item):
-            invocations.append((prompt, dataset_item))
+        def invoke(self, prompt, dataset_item, *, candidate_template=None):
+            invocations.append((prompt, dataset_item, candidate_template))
             return "result"
 
     module = SimpleNamespace(OptimizableAgent=FakeBaseAgent)
     runner = FakeRunner()
     agent = opik_optimize.make_optimizable_agent(module, runner, "project")
 
+    prompt = SimpleNamespace(
+        system="candidate {task_id}",
+        messages=None,
+        get_messages=lambda item: [{"role": "system", "content": f"candidate {item['task_id']}"}],
+    )
     result = agent.invoke_agent(
-        {"main": SimpleNamespace(system="candidate", messages=None)},
+        {"main": prompt},
         {"task_id": "task-a"},
     )
 
     assert result == "result"
-    assert invocations == [("candidate", {"task_id": "task-a"})]
+    assert invocations == [("candidate task-a", {"task_id": "task-a"}, "candidate {task_id}")]
     assert agent.trace_metadata["optimization_run"] == "run-a"
