@@ -12,6 +12,7 @@
 - [Running A Single Job](#running-a-single-job)
 - [Running With Different Agents](#running-with-different-agents)
 - [Running Your Own Models](#running-your-own-models)
+- [Publishing Results To Opik](#publishing-results-to-opik)
 - [Publishing Results To Agent Observability](#publishing-results-to-agent-observability)
 - [Submitting Results To The Leaderboard](#submitting-results-to-the-leaderboard)
 
@@ -353,6 +354,98 @@ The suite uses the default repo agent.
 If you want to benchmark a custom agent across the same matrix, run `bench:job` variants yourself
 or extend suite orchestration in code.
 
+## Publishing Results To Opik
+
+[Opik](https://github.com/comet-ml/opik) publishing is optional. Harbor remains the benchmark
+runner, `tasks-spec/` remains the dataset source of truth, and the o11y-bench verifier remains the
+authoritative grader. The integration adds a synchronized Opik Test Suite plus experiments that
+contain root traces, ATIF step spans, nested tool spans, token/cost metadata, and detailed verifier
+feedback scores.
+
+Install the pinned Opik SDK extra:
+
+```bash
+mise run opik:setup
+```
+
+### Run Opik Locally
+
+Run Opik as its own Docker Compose project; do not add it to the per-trial Compose stack under
+`environment/`:
+
+```bash
+git clone https://github.com/comet-ml/opik.git
+cd opik
+./opik.sh
+```
+
+The default UI is `http://localhost:5173` and the SDK endpoint is
+`http://localhost:5173/api`. `./opik.sh --stop` preserves data, while `./opik.sh --clean` deletes
+it. If port 5173 is occupied, start it with a different port, for example
+`NGINX_PORT=5293 ./opik.sh`, and use that port below.
+
+Configure `.env` in this repository (mise loads it automatically):
+
+```dotenv
+OPIK_URL_OVERRIDE=http://localhost:5173/api
+OPIK_WORKSPACE=default
+OPIK_PROJECT_NAME=o11y-bench
+OPIK_TEST_SUITE_NAME=o11y-bench
+```
+
+A local deployment does not require `OPIK_API_KEY`. For Opik Cloud, configure
+`OPIK_API_KEY`, `OPIK_WORKSPACE`, and `OPIK_URL_OVERRIDE` with the values provided by Opik.
+See [.env.sample](.env.sample) for all available labels and publishing options.
+
+### Synchronize The Opik Test Suite
+
+Synchronize the source YAML before publishing benchmark results:
+
+```bash
+mise run opik:sync-suite
+```
+
+This validates every task spec and reconciles the remote suite by stable UUID. Existing cases are
+updated, newly added cases are inserted, and cases removed from `tasks-spec/` are pruned. The suite
+defaults to three runs per item with a pass threshold of one, matching the benchmark's pass@3
+semantics. Override these with `OPIK_RUNS_PER_ITEM` and `OPIK_PASS_THRESHOLD`.
+
+Rubric criteria are also stored as Opik Test Suite assertions for optional native Opik replay. They
+do not replace deterministic checks, weighted rubric grading, hidden facts, or scenario-clock-aware
+checks performed by the o11y-bench verifier.
+
+### Publish Opik Experiments
+
+Run one benchmark job and stream every scored trial to an Opik Test Suite experiment:
+
+```bash
+mise run opik:job -- \
+  --model anthropic/claude-haiku-4-5-20251001 \
+  --task-name query-cpu-metrics \
+  --n-attempts 3 \
+  --n-concurrent 1
+```
+
+The equivalent direct command is:
+
+```bash
+uv run --extra opik python -m o11y_bench job \
+  --model anthropic/claude-haiku-4-5-20251001 \
+  --task-name query-cpu-metrics \
+  --n-attempts 3 \
+  --n-concurrent 1 \
+  --opik-publish
+```
+
+Use `mise run opik:suite -- <options>` for the standard multi-model suite. Publishing state is
+stored in `.opik-publish.json` inside each job directory. Experiment, trace, and span UUIDs are
+deterministic, so Harbor resume and retry operations do not duplicate completed trials. Set
+`OPIK_EXPERIMENT_ID` to a UUID only when you need to force an explicit experiment identity.
+
+Raw `trajectory.json`, `grading_details.json`, and `result.json` uploads are disabled by default to
+avoid duplicating potentially sensitive artifacts. Set `OPIK_UPLOAD_ARTIFACTS=true` to attach them
+to each root trace.
+
 ## Publishing Results To Agent Observability
 
 Publishing is optional. Harbor remains the experiment runner and ATIF remains the native trajectory
@@ -517,6 +610,8 @@ mise run setup:preflight
 mise run setup:smoke
 mise run agento11y:setup
 mise run agento11y:sync-suite
+mise run opik:setup
+mise run opik:sync-suite
 mise run lint
 mise run format
 mise run typecheck
