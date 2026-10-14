@@ -575,6 +575,19 @@ def main() -> None:
             split="validation",
             tasks=validation_tasks,
         )
+    client.create_optimization(
+        dataset_name=training_dataset.name,
+        objective_name="benchmark_reward_metric",
+        name=f"o11y-bench-{run_name}",
+        metadata={
+            "source": "o11y-bench",
+            "framework": "harbor",
+            "model": args.model,
+            "optimizer_model": args.optimizer_model or args.model,
+        },
+        optimization_id=optimization_id,
+        project_name=args.project_name,
+    )
     client.flush()
 
     output_dir = args.jobs_dir.resolve() / run_name
