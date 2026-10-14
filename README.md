@@ -446,6 +446,76 @@ Raw `trajectory.json`, `grading_details.json`, and `result.json` uploads are dis
 avoid duplicating potentially sensitive artifacts. Set `OPIK_UPLOAD_ARTIFACTS=true` to attach them
 to each root trace.
 
+### Optimize The Agent System Prompt
+
+The Opik Agent Optimizer can evaluate prompt candidates through complete Harbor scenarios. Every
+evaluation starts the normal task container and observability sidecar, runs the candidate prompt,
+and uses the authoritative o11y-bench verifier reward as the optimization objective. Detailed ATIF
+traces and verifier scores are linked to the Opik optimization run.
+
+Install the pinned optimizer SDK:
+
+```bash
+mise run opik:optimization:setup
+```
+
+Run a minimal wiring smoke test:
+
+```bash
+mise run opik:optimize -- \
+  --model openai/gpt-5.4-nano \
+  --optimizer-model openai/gpt-5.4-nano \
+  --task-name query-cpu-metrics \
+  --max-trials 1 \
+  --prompts-per-round 1 \
+  --n-attempts 1 \
+  --run-name my-optimization-smoke
+```
+
+A useful optimization should use multiple training tasks and separate validation tasks:
+
+```bash
+mise run opik:optimize -- \
+  --model anthropic/claude-haiku-4-5-20251001 \
+  --optimizer-model openai/gpt-5.4-mini \
+  --task-name query-cpu-metrics \
+  --task-name promql-error-rate \
+  --validation-task-name query-memory-metrics \
+  --max-trials 5 \
+  --n-attempts 1 \
+  --run-name system-prompt-pilot
+```
+
+The optimizer only receives task IDs, statements, categories, and tags. Hidden facts, checks,
+rubric definitions, and judge explanations are not placed in the optimization datasets. By
+default, feedback includes numeric grading components and the agent's final response; use
+`--detailed-feedback` only when exposing full judge explanations is acceptable.
+
+All candidate evaluations in a run share one pinned scenario clock and execute sequentially to
+avoid Docker-side interference. The default objective is mean verifier reward. Use
+`--score-mode pass-at-k --n-attempts 3` to optimize for whether any attempt fully scores 1.0.
+Be aware that this triples the Harbor work per task and candidate.
+
+Outputs are written under:
+
+```text
+jobs/opik-optimization/<run-name>/
+├── best_system_prompt.txt
+├── optimization_manifest.json
+├── optimization_result.json
+├── candidates/
+└── <task>-opt-<candidate>-k<attempts>/
+```
+
+A run name is immutable. To continue it with a larger trial budget, repeat the original command,
+add `--resume`, and change only `--max-trials` or `--prompts-per-round`. Candidate job directories
+and Opik identities are reused safely. Use a new run name when changing tasks, models, attempts,
+scoring, or feedback settings.
+
+Each optimization performs one full Harbor execution for every sampled task in the baseline and in
+each candidate. Start with one attempt, one prompt per round, and a small task set before increasing
+the budget.
+
 ## Publishing Results To Agent Observability
 
 Publishing is optional. Harbor remains the experiment runner and ATIF remains the native trajectory
@@ -612,6 +682,8 @@ mise run agento11y:setup
 mise run agento11y:sync-suite
 mise run opik:setup
 mise run opik:sync-suite
+mise run opik:optimization:setup
+mise run opik:optimize -- --help
 mise run lint
 mise run format
 mise run typecheck
