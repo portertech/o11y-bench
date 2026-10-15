@@ -23,6 +23,8 @@ from harbor.models.agent.context import AgentContext
 
 RUNNER_SCRIPT = Path(__file__).parent / "agent_runner.py"
 SYSTEM_PROMPT = Path(__file__).parent / "system_prompt.txt"
+PLANNER_PROMPT = Path(__file__).parent / "planner_prompt.txt"
+SYNTHESIS_PROMPT = Path(__file__).parent / "synthesis_prompt.txt"
 TASK_PROMPT = Path(__file__).parent / "task_prompt.txt"
 VIEWER_COMMAND_STDOUT_PATH = "/logs/agent/command-0/stdout.txt"
 
@@ -66,24 +68,37 @@ class O11yBenchAgent(BaseAgent):
         temperature: float | None = None,
         extra_env: dict[str, str] | None = None,
         system_prompt_path: str | None = None,
+        planner_prompt_path: str | None = None,
+        synthesis_prompt_path: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
         self._extra_env = extra_env or {}
-        self._system_prompt_path = (
-            Path(system_prompt_path).expanduser().resolve() if system_prompt_path else SYSTEM_PROMPT
+        self._system_prompt_path = self._resolve_prompt_path(
+            system_prompt_path, SYSTEM_PROMPT, "system"
         )
-        if not self._system_prompt_path.is_file():
-            raise ValueError(f"system prompt file does not exist: {self._system_prompt_path}")
+        self._planner_prompt_path = self._resolve_prompt_path(
+            planner_prompt_path, PLANNER_PROMPT, "planner"
+        )
+        self._synthesis_prompt_path = self._resolve_prompt_path(
+            synthesis_prompt_path, SYNTHESIS_PROMPT, "synthesis"
+        )
+
+    @staticmethod
+    def _resolve_prompt_path(value: str | None, default: Path, label: str) -> Path:
+        path = Path(value).expanduser().resolve() if value else default
+        if not path.is_file():
+            raise ValueError(f"{label} prompt file does not exist: {path}")
+        return path
 
     @staticmethod
     def name() -> str:
         return "o11y-bench"
 
     def version(self) -> str:
-        return "1.0.0"
+        return "1.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
         await environment.exec(command="mkdir -p /app/agents")
@@ -94,6 +109,14 @@ class O11yBenchAgent(BaseAgent):
         await environment.upload_file(
             source_path=self._system_prompt_path,
             target_path="/app/system_prompt.txt",
+        )
+        await environment.upload_file(
+            source_path=self._planner_prompt_path,
+            target_path="/app/planner_prompt.txt",
+        )
+        await environment.upload_file(
+            source_path=self._synthesis_prompt_path,
+            target_path="/app/synthesis_prompt.txt",
         )
         await environment.upload_file(
             source_path=TASK_PROMPT,

@@ -23,6 +23,12 @@ from .opik_suite import sync_test_suite
 _DEFAULT_JOBS_DIR = ROOT / "jobs" / "opik-optimization"
 _RESULT_MARKER = "o11y_bench_optimization_result"
 _MAX_REASON_LENGTH = 12_000
+_PROMPT_COMPONENTS = ("planner", "investigator", "synthesis")
+_PROMPT_AGENT_KWARGS = {
+    "planner": "planner_prompt_path",
+    "investigator": "system_prompt_path",
+    "synthesis": "synthesis_prompt_path",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +96,10 @@ class HarborOptimizationRunner:
 
     def invoke(
         self,
-        system_prompt: str,
+        prompt_components: dict[str, str],
         dataset_item: dict[str, Any],
         *,
-        candidate_template: str | None = None,
+        candidate_templates: dict[str, str] | None = None,
     ) -> str:
         task_id = str(dataset_item.get("task_id") or "")
         if not task_id or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", task_id):
@@ -101,13 +107,25 @@ class HarborOptimizationRunner:
         if not (self.root / "tasks" / task_id).is_dir():
             raise ValueError(f"generated Harbor task does not exist: {task_id}")
 
-        candidate_source = candidate_template or system_prompt
+        if set(prompt_components) != set(_PROMPT_COMPONENTS):
+            raise ValueError(
+                "candidate prompt components must be exactly: " + ", ".join(_PROMPT_COMPONENTS)
+            )
+        templates = candidate_templates or prompt_components
+        if set(templates) != set(_PROMPT_COMPONENTS):
+            raise ValueError(
+                "candidate prompt templates must be exactly: " + ", ".join(_PROMPT_COMPONENTS)
+            )
+        candidate_source = json.dumps(templates, sort_keys=True, separators=(",", ":"))
         candidate_hash = hashlib.sha256(candidate_source.encode()).hexdigest()
         candidate_dir = self.jobs_dir / "candidates" / candidate_hash
         candidate_dir.mkdir(parents=True, exist_ok=True)
-        _write_stable_file(candidate_dir / "system_prompt.template.txt", candidate_source)
-        prompt_path = candidate_dir / f"{task_id}.system_prompt.txt"
-        _write_stable_file(prompt_path, system_prompt)
+        prompt_paths: dict[str, Path] = {}
+        for component in _PROMPT_COMPONENTS:
+            _write_stable_file(candidate_dir / f"{component}.template.txt", templates[component])
+            prompt_path = candidate_dir / f"{task_id}.{component}_prompt.txt"
+            _write_stable_file(prompt_path, prompt_components[component])
+            prompt_paths[component] = prompt_path
 
         job_name = f"{task_id}-opt-{candidate_hash[:16]}-k{self.n_attempts}"
         job_dir = self.jobs_dir / job_name
@@ -141,7 +159,8 @@ class HarborOptimizationRunner:
         ]
         if self.publish_traces:
             command.append("--opik-publish")
-        command.extend(["--ak", f"system_prompt_path={prompt_path}"])
+        for component in _PROMPT_COMPONENTS:
+            command.extend(["--ak", f"{_PROMPT_AGENT_KWARGS[component]}={prompt_paths[component]}"])
 
         env = os.environ.copy()
         env["O11Y_SCENARIO_TIME_ISO"] = self.scenario_time
@@ -370,15 +389,23 @@ def make_optimizable_agent(optimizer: Any, runner: HarborOptimizationRunner, pro
             seed: int | None = None,
         ) -> str:
             del allow_tool_use, seed
-            if len(prompts) != 1:
-                raise ValueError("o11y-bench optimization supports one system prompt")
-            prompt = next(iter(prompts.values()))
-            system_prompt_template = _system_prompt_text(prompt)
-            system_prompt = _rendered_system_prompt(prompt, dataset_item)
+            if set(prompts) != set(_PROMPT_COMPONENTS):
+                raise ValueError(
+                    "o11y-bench optimization requires prompt components: "
+                    + ", ".join(_PROMPT_COMPONENTS)
+                )
+            templates = {
+                component: _system_prompt_text(prompts[component])
+                for component in _PROMPT_COMPONENTS
+            }
+            rendered = {
+                component: _rendered_system_prompt(prompts[component], dataset_item)
+                for component in _PROMPT_COMPONENTS
+            }
             return runner.invoke(
-                system_prompt,
+                rendered,
                 dataset_item,
-                candidate_template=system_prompt_template,
+                candidate_templates=templates,
             )
 
     return HarborOptimizableAgent()
@@ -486,20 +513,29 @@ def _import_optimizer() -> Any:
     return opik_optimizer
 
 
-def _result_prompt(result: Any) -> Any:
-    prompt = result.prompt
-    if isinstance(prompt, dict):
-        if len(prompt) != 1:
-            raise ValueError("optimizer returned multiple prompts")
-        return next(iter(prompt.values()))
-    return prompt
+def _result_prompts(result: Any) -> dict[str, Any]:
+    prompts = result.prompt
+    if isinstance(prompts, dict):
+        return prompts
+    return {"investigator": prompts}
 
 
 def _save_result(result: Any, output_dir: Path, *, arguments: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    prompt = _result_prompt(result)
-    system_prompt = _system_prompt_text(prompt)
-    (output_dir / "best_system_prompt.txt").write_text(system_prompt)
+    prompts = _result_prompts(result)
+    if set(prompts) != set(_PROMPT_COMPONENTS):
+        raise ValueError(
+            "optimizer returned unexpected prompt components: " + ", ".join(sorted(prompts))
+        )
+    prompt_payload: dict[str, Any] = {}
+    for component in _PROMPT_COMPONENTS:
+        prompt = prompts[component]
+        prompt_text = _system_prompt_text(prompt)
+        (output_dir / f"best_{component}_prompt.txt").write_text(prompt_text)
+        prompt_payload[component] = prompt.to_dict()
+    # Preserve the original artifact name for consumers that treat the investigator as the
+    # agent's primary system prompt.
+    (output_dir / "best_system_prompt.txt").write_text(_system_prompt_text(prompts["investigator"]))
     payload = {
         "optimization_id": result.optimization_id,
         "optimizer": result.optimizer,
@@ -510,7 +546,7 @@ def _save_result(result: Any, output_dir: Path, *, arguments: dict[str, Any]) ->
         "llm_calls": result.llm_calls,
         "llm_cost_total": result.llm_cost_total,
         "llm_token_usage_total": result.llm_token_usage_total,
-        "prompt": prompt.to_dict(),
+        "prompts": prompt_payload,
         "arguments": arguments,
     }
     (output_dir / "optimization_result.json").write_text(
@@ -551,6 +587,7 @@ def resolve_run_manifest(
         "reasoning_effort",
         "project_name",
         "dataset_prefix",
+        "prompt_components",
         "publish_traces",
         "detailed_feedback",
         "seed",
@@ -643,6 +680,7 @@ def main() -> None:
         "reasoning_effort": args.reasoning_effort,
         "project_name": args.project_name,
         "dataset_prefix": dataset_prefix,
+        "prompt_components": list(_PROMPT_COMPONENTS),
         "max_trials": args.max_trials,
         "prompts_per_round": args.prompts_per_round,
         "publish_traces": publish_traces,
@@ -722,12 +760,26 @@ def main() -> None:
         scenario_time=scenario_time,
     )
     agent = make_optimizable_agent(optimizer_module, runner, args.project_name)
-    prompt = optimizer_module.ChatPrompt(
-        name="o11y-bench-system-prompt",
-        system=(ROOT / "agents" / "system_prompt.txt").read_text(),
-        user="{statement}",
-        model=args.model,
-    )
+    prompt = {
+        "planner": optimizer_module.ChatPrompt(
+            name="planner",
+            system=(ROOT / "agents" / "planner_prompt.txt").read_text(),
+            user="{statement}",
+            model=args.model,
+        ),
+        "investigator": optimizer_module.ChatPrompt(
+            name="investigator",
+            system=(ROOT / "agents" / "system_prompt.txt").read_text(),
+            user="{statement}",
+            model=args.model,
+        ),
+        "synthesis": optimizer_module.ChatPrompt(
+            name="synthesis",
+            system=(ROOT / "agents" / "synthesis_prompt.txt").read_text(),
+            user="{statement}",
+            model=args.model,
+        ),
+    }
     optimizer = optimizer_module.MetaPromptOptimizer(
         model=args.optimizer_model or args.model,
         prompts_per_round=args.prompts_per_round,
@@ -757,7 +809,7 @@ def main() -> None:
     )
     _save_result(result, output_dir, arguments=run_manifest)
     result.display()
-    print(f"Best system prompt: {output_dir / 'best_system_prompt.txt'}")
+    print(f"Best prompt components: {output_dir}")
     print(f"Optimization result: {output_dir / 'optimization_result.json'}")
 
 

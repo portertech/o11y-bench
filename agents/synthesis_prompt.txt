@@ -1,0 +1,14 @@
+Produce the final answer to the original observability task using only evidence already present in
+the conversation.
+
+Treat the investigator's draft as unverified. Re-read the actual tool observations and correct the
+draft where necessary. Before reporting a count, percentage, rate, peak, ranking, timestamp, service,
+operation, path, or trace ID, verify that the value is directly supported by a tool result. Compute
+shares from compatible aggregate results over the same time window. Do not infer a total from a
+truncated raw-log page or confuse returned rows with an aggregate count. Resolve contradictory
+results explicitly; if the available evidence cannot establish a requested value, say so rather than
+guessing.
+
+Answer the user's question directly and concisely. Connect evidence across signal types, distinguish
+the primary cause from downstream symptoms, and include only trace IDs that appeared in tool output.
+Do not mention this checking instruction or the investigation phases.

@@ -152,8 +152,13 @@ def test_harbor_runner_executes_candidate_and_returns_authoritative_score(monkey
     root = tmp_path / "repo"
     (root / "tasks" / "task-a").mkdir(parents=True)
     jobs_dir = root / "jobs" / "optimization"
-    prompt = "Use evidence and explain your reasoning."
-    candidate_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    prompts = {
+        "planner": "Plan the investigation.",
+        "investigator": "Use evidence and explain your reasoning.",
+        "synthesis": "Verify the evidence and answer.",
+    }
+    candidate_source = json.dumps(prompts, sort_keys=True, separators=(",", ":"))
+    candidate_hash = hashlib.sha256(candidate_source.encode()).hexdigest()
     job_name = f"task-a-opt-{candidate_hash[:16]}-k1"
     job_dir = jobs_dir / "run-a" / job_name
     calls = []
@@ -178,7 +183,7 @@ def test_harbor_runner_executes_candidate_and_returns_authoritative_score(monkey
         scenario_time="2026-01-01T00:00:00Z",
     )
 
-    output = runner.invoke(prompt, {"task_id": "task-a", "statement": "Investigate."})
+    output = runner.invoke(prompts, {"task_id": "task-a", "statement": "Investigate."})
     evaluation = opik_optimize.parse_evaluation_output(output)
 
     assert evaluation.score == 0.75
@@ -187,8 +192,14 @@ def test_harbor_runner_executes_candidate_and_returns_authoritative_score(monkey
     command, kwargs = calls[0]
     assert "--skip-preflight" in command
     assert "--opik-publish" in command
-    prompt_path = jobs_dir / "run-a" / "candidates" / candidate_hash / "task-a.system_prompt.txt"
-    assert f"system_prompt_path={prompt_path}" in command
+    candidate_dir = jobs_dir / "run-a" / "candidates" / candidate_hash
+    expected_kwargs = {
+        "planner_prompt_path": candidate_dir / "task-a.planner_prompt.txt",
+        "system_prompt_path": candidate_dir / "task-a.investigator_prompt.txt",
+        "synthesis_prompt_path": candidate_dir / "task-a.synthesis_prompt.txt",
+    }
+    for name, path in expected_kwargs.items():
+        assert f"{name}={path}" in command
     assert kwargs["env"]["OPIK_OPTIMIZATION_ID"] == runner.optimization_id
     assert kwargs["env"]["O11Y_SCENARIO_TIME_ISO"] == "2026-01-01T00:00:00Z"
 
@@ -247,6 +258,40 @@ def test_parse_evaluation_output_rejects_regular_model_text():
         opik_optimize.parse_evaluation_output("ordinary final answer")
 
 
+def test_save_result_writes_all_best_prompt_components(tmp_path):
+    class Prompt:
+        def __init__(self, name):
+            self.name = name
+            self.system = f"{name} instructions"
+            self.messages = None
+
+        def to_dict(self):
+            return {"name": self.name, "system": self.system}
+
+    result = SimpleNamespace(
+        prompt={component: Prompt(component) for component in opik_optimize._PROMPT_COMPONENTS},
+        optimization_id="optimization-id",
+        optimizer="MetaPromptOptimizer",
+        score=0.75,
+        initial_score=0.5,
+        metric_name="reward",
+        dataset_id="dataset-id",
+        llm_calls=2,
+        llm_cost_total=0.1,
+        llm_token_usage_total=100,
+    )
+
+    opik_optimize._save_result(result, tmp_path, arguments={"max_trials": 1})
+
+    for component in opik_optimize._PROMPT_COMPONENTS:
+        assert (tmp_path / f"best_{component}_prompt.txt").read_text() == (
+            f"{component} instructions"
+        )
+    assert (tmp_path / "best_system_prompt.txt").read_text() == ("investigator instructions")
+    payload = json.loads((tmp_path / "optimization_result.json").read_text())
+    assert set(payload["prompts"]) == set(opik_optimize._PROMPT_COMPONENTS)
+
+
 def test_resolve_run_manifest_requires_explicit_compatible_resume(tmp_path):
     path = tmp_path / "run" / "optimization_manifest.json"
     path.parent.mkdir()
@@ -263,6 +308,7 @@ def test_resolve_run_manifest_requires_explicit_compatible_resume(tmp_path):
         "reasoning_effort": "off",
         "project_name": "o11y-bench",
         "dataset_prefix": "dataset",
+        "prompt_components": ["planner", "investigator", "synthesis"],
         "publish_traces": True,
         "detailed_feedback": False,
         "seed": 42,
@@ -289,7 +335,7 @@ def test_resolve_run_manifest_rejects_missing_resume(tmp_path):
         opik_optimize.resolve_run_manifest(tmp_path / "missing.json", {}, resume=True)
 
 
-def test_make_optimizable_agent_passes_candidate_system_prompt():
+def test_make_optimizable_agent_passes_candidate_prompt_components():
     invocations = []
 
     class FakeBaseAgent:
@@ -301,24 +347,42 @@ def test_make_optimizable_agent_passes_candidate_system_prompt():
         optimization_id = "optimization-id"
         run_name = "run-a"
 
-        def invoke(self, prompt, dataset_item, *, candidate_template=None):
-            invocations.append((prompt, dataset_item, candidate_template))
+        def invoke(self, prompts, dataset_item, *, candidate_templates=None):
+            invocations.append((prompts, dataset_item, candidate_templates))
             return "result"
 
     module = SimpleNamespace(OptimizableAgent=FakeBaseAgent)
     runner = FakeRunner()
     agent = opik_optimize.make_optimizable_agent(module, runner, "project")
 
-    prompt = SimpleNamespace(
-        system="candidate {task_id}",
-        messages=None,
-        get_messages=lambda item: [{"role": "system", "content": f"candidate {item['task_id']}"}],
-    )
+    def prompt(component):
+        return SimpleNamespace(
+            system=f"{component} {{task_id}}",
+            messages=None,
+            get_messages=lambda item: [
+                {"role": "system", "content": f"{component} {item['task_id']}"}
+            ],
+        )
+
     result = agent.invoke_agent(
-        {"main": prompt},
+        {component: prompt(component) for component in opik_optimize._PROMPT_COMPONENTS},
         {"task_id": "task-a"},
     )
 
     assert result == "result"
-    assert invocations == [("candidate task-a", {"task_id": "task-a"}, "candidate {task_id}")]
+    assert invocations == [
+        (
+            {
+                "planner": "planner task-a",
+                "investigator": "investigator task-a",
+                "synthesis": "synthesis task-a",
+            },
+            {"task_id": "task-a"},
+            {
+                "planner": "planner {task_id}",
+                "investigator": "investigator {task_id}",
+                "synthesis": "synthesis {task_id}",
+            },
+        )
+    ]
     assert agent.trace_metadata["optimization_run"] == "run-a"

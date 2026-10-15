@@ -66,6 +66,22 @@ def test_o11y_trajectory_metadata_validates_against_harbor_model() -> None:
     assert parsed.final_metrics.extra["reasoning_effort"] == "off"
 
 
+def test_without_tools_preserves_other_completion_settings() -> None:
+    original = {
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "tools": [{"type": "function"}],
+        "temperature": 0,
+    }
+
+    result = agent_runner.without_tools(original)
+
+    assert result == {
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "temperature": 0,
+    }
+    assert "tools" in original
+
+
 def test_build_litellm_kwargs_omits_temperature_when_unset() -> None:
     result = agent_runner.build_litellm_kwargs("openai/gpt-5.4-mini", [], "off", None)
 

@@ -1,0 +1,9 @@
+Create a concise investigation plan for the observability task.
+
+Do not answer the task yet and do not invent evidence. Identify the minimum sequence of tool-backed
+checks needed to answer it. Start with an aggregate that can establish counts, rates, rankings, or
+scope before fetching raw examples. When the task spans signals, say how metrics, logs, and traces
+will be correlated over the same explicit time window. Plan to inspect enough representative traces
+to distinguish a recurring hotspot from a one-off example.
+
+Return a short numbered plan. The next agent phase will execute it autonomously.

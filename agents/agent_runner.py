@@ -41,16 +41,14 @@ def scenario_clock_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _load_system_prompt() -> str:
-    return Path(__file__).with_name("system_prompt.txt").read_text().strip()
+def _load_prompt(name: str) -> str:
+    return Path(__file__).with_name(name).read_text().strip()
 
 
-def _load_task_prompt_template() -> str:
-    return Path(__file__).with_name("task_prompt.txt").read_text().strip()
-
-
-SYSTEM_PROMPT = _load_system_prompt()
-TASK_PROMPT_TEMPLATE = _load_task_prompt_template()
+SYSTEM_PROMPT = _load_prompt("system_prompt.txt")
+PLANNER_PROMPT = _load_prompt("planner_prompt.txt")
+SYNTHESIS_PROMPT = _load_prompt("synthesis_prompt.txt")
+TASK_PROMPT_TEMPLATE = _load_prompt("task_prompt.txt")
 MAX_AGENT_STEPS = 50
 # Same table as reporting/model_costs.py (task image avoids that import); keep aligned.
 USD_PER_1M_TOKENS: Final[dict[str, tuple[float, float, float]]] = {
@@ -273,6 +271,12 @@ def build_litellm_kwargs(
     return litellm_kwargs
 
 
+def without_tools(litellm_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return completion kwargs for a planning or synthesis call without tools."""
+
+    return {key: value for key, value in litellm_kwargs.items() if key != "tools"}
+
+
 async def run_agent() -> None:
     import litellm
     from mcp.client.session import ClientSession
@@ -306,6 +310,41 @@ async def run_agent() -> None:
     tool_call_count = 0
     start = time.time()
 
+    def response_metrics(response: Any) -> dict[str, int | float]:
+        usage = response.usage
+        prompt_tokens = 0
+        completion_tokens = 0
+        cached_tokens = 0
+        if usage:
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            stats["input"] += prompt_tokens
+            stats["output"] += completion_tokens
+            details = getattr(usage, "prompt_tokens_details", None)
+            if details:
+                cached_tokens = getattr(details, "cached_tokens", 0) or 0
+                stats["cache"] += cached_tokens
+        try:
+            step_cost = litellm.completion_cost(completion_response=response) or 0.0
+        except Exception:
+            step_cost = 0.0
+        if step_cost <= 0:
+            estimated = estimate_cost_usd(
+                model,
+                int(prompt_tokens),
+                int(cached_tokens),
+                int(completion_tokens),
+            )
+            if estimated is not None:
+                step_cost = estimated
+        stats["cost"] += step_cost
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+            "cost_usd": step_cost,
+        }
+
     def flush_trajectory() -> None:
         """Write trajectory to disk after each step so partial work survives kills."""
         trajectory = {
@@ -314,7 +353,7 @@ async def run_agent() -> None:
             "trajectory_id": trajectory_id,
             "agent": {
                 "name": "o11y-bench",
-                "version": "1.0.0",
+                "version": "1.1.0",
                 "model_name": model,
                 "tool_definitions": tool_defs,
             },
@@ -328,6 +367,7 @@ async def run_agent() -> None:
                 "extra": {
                     "total_tool_calls": tool_call_count,
                     "reasoning_effort": reasoning_effort,
+                    "prompt_components": ["planner", "investigator", "synthesis"],
                     "elapsed_seconds": time.time() - start,
                 },
             },
@@ -343,22 +383,55 @@ async def run_agent() -> None:
                 tool_defs[:] = [t["function"] for t in tools]
                 print(f"Discovered {len(tools)} tools, model={model}")
 
-                step_id += 1
-                atif_steps.append(make_atif_step(step_id, "system", SYSTEM_PROMPT))
-                step_id += 1
-                atif_steps.append(make_atif_step(step_id, "user", task_prompt))
-
-                messages: list[dict[str, Any]] = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": task_prompt},
-                ]
-
                 litellm_kwargs = build_litellm_kwargs(
                     model,
                     tools,
                     reasoning_effort,
                     temperature,
                 )
+                phase_kwargs = without_tools(litellm_kwargs)
+
+                step_id += 1
+                atif_steps.append(make_atif_step(step_id, "system", PLANNER_PROMPT))
+                step_id += 1
+                atif_steps.append(make_atif_step(step_id, "user", task_prompt))
+                planner_response = await completion_with_retries(
+                    litellm,
+                    [
+                        {"role": "system", "content": PLANNER_PROMPT},
+                        {"role": "user", "content": task_prompt},
+                    ],
+                    phase_kwargs,
+                )
+                planner_message = cast(Any, planner_response).choices[0].message
+                plan = planner_message.content or ""
+                step_id += 1
+                atif_steps.append(
+                    make_atif_step(
+                        step_id,
+                        "agent",
+                        plan,
+                        reasoning_content=getattr(planner_message, "reasoning_content", None),
+                        metrics=response_metrics(planner_response),
+                    )
+                )
+
+                step_id += 1
+                atif_steps.append(make_atif_step(step_id, "system", SYSTEM_PROMPT))
+                step_id += 1
+                atif_steps.append(make_atif_step(step_id, "user", task_prompt))
+                investigation_request = (
+                    f"{task_prompt}\n\n"
+                    "A planning phase produced the following proposed investigation. "
+                    "Execute it using the available tools, adapting when observations "
+                    "require it.\n\n"
+                    f"{plan}"
+                )
+                messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": investigation_request},
+                ]
+                flush_trajectory()
 
                 step = 0
                 while True:
@@ -367,42 +440,12 @@ async def run_agent() -> None:
                     print(f"[{step}]", end=" ", flush=True)
 
                     resp = await completion_with_retries(litellm, messages, litellm_kwargs)
-
-                    u = cast(Any, resp).usage
-                    prompt_tokens = 0
-                    completion_tokens = 0
-                    cached_tokens = 0
-                    if u:
-                        prompt_tokens = getattr(u, "prompt_tokens", 0) or 0
-                        completion_tokens = getattr(u, "completion_tokens", 0) or 0
-                        stats["input"] += prompt_tokens
-                        stats["output"] += completion_tokens
-                        if hasattr(u, "prompt_tokens_details") and u.prompt_tokens_details:
-                            cached_tokens = (
-                                getattr(u.prompt_tokens_details, "cached_tokens", 0) or 0
-                            )
-                            stats["cache"] += cached_tokens
-                    try:
-                        step_cost = litellm.completion_cost(completion_response=resp) or 0.0
-                    except Exception:
-                        step_cost = 0.0
-                    if step_cost <= 0:
-                        estimated = estimate_cost_usd(
-                            model,
-                            int(prompt_tokens),
-                            int(cached_tokens),
-                            int(completion_tokens),
-                        )
-                        if estimated is not None:
-                            step_cost = estimated
-                    stats["cost"] += step_cost
-
+                    metrics = response_metrics(resp)
                     msg = cast(Any, resp).choices[0].message
                     content = msg.content or ""
                     tool_calls = msg.tool_calls or []
                     reasoning = getattr(msg, "reasoning_content", None)
 
-                    # Build ATIF tool_calls
                     atif_tool_calls = [
                         {
                             "tool_call_id": tc.id,
@@ -413,6 +456,7 @@ async def run_agent() -> None:
                     ]
 
                     if not tool_calls:
+                        messages.append({"role": "assistant", "content": content})
                         step_id += 1
                         atif_steps.append(
                             make_atif_step(
@@ -420,22 +464,49 @@ async def run_agent() -> None:
                                 "agent",
                                 content,
                                 reasoning_content=reasoning,
-                                metrics={
-                                    "prompt_tokens": prompt_tokens,
-                                    "completion_tokens": completion_tokens,
-                                    "cached_tokens": cached_tokens,
-                                    "cost_usd": step_cost,
-                                },
+                                metrics=metrics,
+                            )
+                        )
+
+                        step_id += 1
+                        atif_steps.append(make_atif_step(step_id, "system", SYNTHESIS_PROMPT))
+                        synthesis_request = (
+                            "Now produce the final answer to the original task after checking the "
+                            "investigation against the observed evidence."
+                        )
+                        step_id += 1
+                        atif_steps.append(make_atif_step(step_id, "user", synthesis_request))
+                        synthesis_messages = [
+                            {"role": "system", "content": SYNTHESIS_PROMPT},
+                            *messages[1:],
+                            {"role": "user", "content": synthesis_request},
+                        ]
+                        synthesis_response = await completion_with_retries(
+                            litellm,
+                            synthesis_messages,
+                            phase_kwargs,
+                        )
+                        synthesis_message = cast(Any, synthesis_response).choices[0].message
+                        final_content = synthesis_message.content or ""
+                        step_id += 1
+                        atif_steps.append(
+                            make_atif_step(
+                                step_id,
+                                "agent",
+                                final_content,
+                                reasoning_content=getattr(
+                                    synthesis_message, "reasoning_content", None
+                                ),
+                                metrics=response_metrics(synthesis_response),
                             )
                         )
                         flush_trajectory()
-                        print("done")
+                        print("synthesized")
                         break
 
                     messages.append(msg.model_dump())
                     tool_call_count += len(tool_calls)
 
-                    # Execute tool calls and collect observations
                     observation_results: list[dict[str, Any]] = []
                     for tc in tool_calls:
                         fn = tc.function.name or ""
@@ -459,12 +530,7 @@ async def run_agent() -> None:
                             reasoning_content=reasoning,
                             tool_calls=atif_tool_calls,
                             observation={"results": observation_results},
-                            metrics={
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens,
-                                "cached_tokens": cached_tokens,
-                                "cost_usd": step_cost,
-                            },
+                            metrics=metrics,
                         )
                     )
                     flush_trajectory()

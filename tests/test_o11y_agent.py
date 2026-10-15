@@ -69,27 +69,43 @@ class MockEnvironment:
 
 
 @pytest.mark.anyio
-async def test_setup_uploads_explicit_system_prompt(tmp_path: Path) -> None:
+async def test_setup_uploads_explicit_prompt_components(tmp_path: Path) -> None:
     system_prompt = tmp_path / "candidate-system-prompt.txt"
-    system_prompt.write_text("Optimized instructions")
+    planner_prompt = tmp_path / "candidate-planner-prompt.txt"
+    synthesis_prompt = tmp_path / "candidate-synthesis-prompt.txt"
+    system_prompt.write_text("Optimized investigation instructions")
+    planner_prompt.write_text("Optimized planning instructions")
+    synthesis_prompt.write_text("Optimized synthesis instructions")
     agent = O11yBenchAgent(
         logs_dir=tmp_path,
         model_name="openai/gpt-5.4-nano",
         system_prompt_path=str(system_prompt),
+        planner_prompt_path=str(planner_prompt),
+        synthesis_prompt_path=str(synthesis_prompt),
     )
     env: Any = MockEnvironment(MockExecResult(return_code=0))
 
     await agent.setup(env)
 
     assert (system_prompt.resolve(), "/app/system_prompt.txt") in env.upload_calls
+    assert (planner_prompt.resolve(), "/app/planner_prompt.txt") in env.upload_calls
+    assert (synthesis_prompt.resolve(), "/app/synthesis_prompt.txt") in env.upload_calls
 
 
-def test_explicit_system_prompt_must_exist(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="system prompt file does not exist"):
+@pytest.mark.parametrize(
+    ("kwarg", "label"),
+    [
+        ("system_prompt_path", "system"),
+        ("planner_prompt_path", "planner"),
+        ("synthesis_prompt_path", "synthesis"),
+    ],
+)
+def test_explicit_prompt_must_exist(tmp_path: Path, kwarg: str, label: str) -> None:
+    with pytest.raises(ValueError, match=rf"{label} prompt file does not exist"):
         O11yBenchAgent(
             logs_dir=tmp_path,
             model_name="openai/gpt-5.4-nano",
-            system_prompt_path=str(tmp_path / "missing.txt"),
+            **{kwarg: str(tmp_path / "missing.txt")},
         )
 
 
