@@ -485,7 +485,7 @@ mise run opik:optimize -- \
   --task-name payments-path-root-cause \
   --validation-task-name cache-refresh-lag-handoff \
   --max-trials 5 \
-  --n-attempts 1 \
+  --n-attempts 3 \
   --run-name system-prompt-pilot
 ```
 
@@ -515,9 +515,10 @@ add `--resume`, and change only `--max-trials` or `--prompts-per-round`. Candida
 and Opik identities are reused safely. Use a new run name when changing tasks, models, attempts,
 scoring, or feedback settings.
 
-Each optimization performs one full Harbor execution for every sampled task in the baseline and in
-each candidate. Start with one attempt, one prompt per round, and a small task set before increasing
-the budget.
+Each optimization performs one full Harbor execution for every sampled task and attempt in the
+baseline and in each candidate. One attempt is appropriate only for wiring smoke tests. Use at least
+three attempts with mean scoring before treating an apparent prompt improvement as meaningful, and
+retain a separate validation task to detect overfitting.
 
 ## Publishing Results To Agent Observability
 
