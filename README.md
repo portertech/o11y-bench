@@ -196,6 +196,12 @@ This is the normal path and uses the custom repo agent:
 mise run bench:job -- --model openai/gpt-5.4-nano --task-name query-cpu-metrics
 ```
 
+The agent executes three prompt-controlled phases: a tool-free planner creates a concise
+investigation plan, the investigator runs the MCP tool loop, and a tool-free synthesis pass checks
+the draft against observed evidence before producing the final answer. The ATIF trajectory records
+all three phases. Their source prompts are `agents/planner_prompt.txt`, `agents/system_prompt.txt`,
+and `agents/synthesis_prompt.txt`.
+
 ### Harbor Built-In Agent
 
 You can switch to a [Harbor built-in agent](https://www.harborframework.com/docs/agents) with `--agent`:
@@ -446,12 +452,13 @@ Raw `trajectory.json`, `grading_details.json`, and `result.json` uploads are dis
 avoid duplicating potentially sensitive artifacts. Set `OPIK_UPLOAD_ARTIFACTS=true` to attach them
 to each root trace.
 
-### Optimize The Agent System Prompt
+### Optimize The Agent Prompt Bundle
 
-The Opik Agent Optimizer can evaluate prompt candidates through complete Harbor scenarios. Every
-evaluation starts the normal task container and observability sidecar, runs the candidate prompt,
-and uses the authoritative o11y-bench verifier reward as the optimization objective. Detailed ATIF
-traces and verifier scores are linked to the Opik optimization run.
+The Opik Agent Optimizer jointly tunes the planner, investigator, and synthesis prompts through
+complete Harbor scenarios. Every evaluation starts the normal task container and observability
+sidecar, runs the candidate prompt bundle, and uses the authoritative o11y-bench verifier reward as
+the optimization objective. Detailed ATIF traces and verifier scores are linked to the Opik
+optimization run.
 
 Install the pinned optimizer SDK:
 
@@ -503,6 +510,9 @@ Outputs are written under:
 
 ```text
 jobs/opik-optimization/<run-name>/
+├── best_planner_prompt.txt
+├── best_investigator_prompt.txt
+├── best_synthesis_prompt.txt
 ├── best_system_prompt.txt
 ├── optimization_manifest.json
 ├── optimization_result.json
@@ -516,9 +526,10 @@ and Opik identities are reused safely. Use a new run name when changing tasks, m
 scoring, or feedback settings.
 
 Each optimization performs one full Harbor execution for every sampled task and attempt in the
-baseline and in each candidate. One attempt is appropriate only for wiring smoke tests. Use at least
-three attempts with mean scoring before treating an apparent prompt improvement as meaningful, and
-retain a separate validation task to detect overfitting.
+baseline and in each candidate. Each execution now includes planner and synthesis model calls in
+addition to the investigator loop. One attempt is appropriate only for wiring smoke tests. Use at
+least three attempts with mean scoring before treating an apparent prompt improvement as meaningful,
+and retain a separate validation task to detect overfitting.
 
 ## Publishing Results To Agent Observability
 
