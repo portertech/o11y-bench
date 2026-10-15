@@ -459,28 +459,30 @@ Install the pinned optimizer SDK:
 mise run opik:optimization:setup
 ```
 
-Run a minimal wiring smoke test:
+Run a representative multi-turn smoke test. `service-degradation-rca` requires the agent to
+investigate across metrics, logs, and traces before forming a conclusion:
 
 ```bash
 mise run opik:optimize -- \
   --model openai/gpt-5.4-nano \
   --optimizer-model openai/gpt-5.4-nano \
-  --task-name query-cpu-metrics \
+  --task-name service-degradation-rca \
   --max-trials 1 \
   --prompts-per-round 1 \
   --n-attempts 1 \
-  --run-name my-optimization-smoke
+  --run-name multiturn-optimization-smoke
 ```
 
-A useful optimization should use multiple training tasks and separate validation tasks:
+A useful optimization should use several multi-turn investigation scenarios and keep validation
+separate from training:
 
 ```bash
 mise run opik:optimize -- \
   --model anthropic/claude-haiku-4-5-20251001 \
   --optimizer-model openai/gpt-5.4-mini \
-  --task-name query-cpu-metrics \
-  --task-name promql-error-rate \
-  --validation-task-name query-memory-metrics \
+  --task-name service-degradation-rca \
+  --task-name payments-path-root-cause \
+  --validation-task-name incident-triage \
   --max-trials 5 \
   --n-attempts 1 \
   --run-name system-prompt-pilot
