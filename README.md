@@ -459,14 +459,15 @@ Install the pinned optimizer SDK:
 mise run opik:optimization:setup
 ```
 
-Run a representative multi-turn smoke test. `service-degradation-rca` requires the agent to
-investigate across metrics, logs, and traces before forming a conclusion:
+Run a representative multi-turn smoke test. `slow-path-hotspot-correlation` requires Loki
+aggregation followed by correlation across several Tempo traces, and leaves useful optimization
+headroom for Haiku 4.5:
 
 ```bash
 mise run opik:optimize -- \
   --model anthropic/claude-haiku-4-5-20251001 \
   --optimizer-model anthropic/claude-haiku-4-5-20251001 \
-  --task-name service-degradation-rca \
+  --task-name slow-path-hotspot-correlation \
   --max-trials 1 \
   --prompts-per-round 1 \
   --n-attempts 1 \
@@ -480,9 +481,9 @@ separate from training:
 mise run opik:optimize -- \
   --model anthropic/claude-haiku-4-5-20251001 \
   --optimizer-model anthropic/claude-haiku-4-5-20251001 \
-  --task-name service-degradation-rca \
+  --task-name slow-path-hotspot-correlation \
   --task-name payments-path-root-cause \
-  --validation-task-name incident-triage \
+  --validation-task-name cache-refresh-lag-handoff \
   --max-trials 5 \
   --n-attempts 1 \
   --run-name system-prompt-pilot
