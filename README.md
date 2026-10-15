@@ -464,8 +464,8 @@ investigate across metrics, logs, and traces before forming a conclusion:
 
 ```bash
 mise run opik:optimize -- \
-  --model openai/gpt-5.4-nano \
-  --optimizer-model openai/gpt-5.4-nano \
+  --model anthropic/claude-haiku-4-5-20251001 \
+  --optimizer-model anthropic/claude-haiku-4-5-20251001 \
   --task-name service-degradation-rca \
   --max-trials 1 \
   --prompts-per-round 1 \
@@ -479,7 +479,7 @@ separate from training:
 ```bash
 mise run opik:optimize -- \
   --model anthropic/claude-haiku-4-5-20251001 \
-  --optimizer-model openai/gpt-5.4-mini \
+  --optimizer-model anthropic/claude-haiku-4-5-20251001 \
   --task-name service-degradation-rca \
   --task-name payments-path-root-cause \
   --validation-task-name incident-triage \
